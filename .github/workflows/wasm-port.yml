@@ -22,7 +22,18 @@ jobs:
       - name: Set up Emscripten
         uses: emscripten-core/setup-emsdk@v15
         with:
-          version: latest
+          # wxWidgets-wasm is an older port and its known working build
+          # environment uses Emscripten 3.1.12. Do not use latest here:
+          # newer Clang/Emscripten releases produce incompatible diagnostics
+          # while compiling wxWidgets' intl.cpp.
+          version: 3.1.12
+
+      - name: Verify Emscripten toolchain
+        run: |
+          set -eux
+          emcc --version
+          em++ --version
+          emcmake --version
 
       - name: Checkout upstream Floating Sandbox
         run: |
@@ -33,7 +44,8 @@ jobs:
         run: |
           set -eux
           mkdir -p third-party/picojson/include
-          curl -L --fail --retry 3 https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h -o third-party/picojson/include/picojson.h
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h \
+            -o third-party/picojson/include/picojson.h
           test -s third-party/picojson/include/picojson.h
 
       - name: Build ZLIB for WebAssembly
@@ -91,17 +103,16 @@ jobs:
           git clone --depth 1 https://github.com/ahilss/wxWidgets-wasm.git wxwidgets-src
           cd wxwidgets-src
 
-          # wxWidgets-wasm expects several bundled libraries as git submodules.
           git submodule update --init src/jpeg src/zlib src/png src/expat 3rdparty/catch
 
           test -f src/zlib/zlib.h
           test -f src/png/png.c
           test -f src/expat/expat/lib/expat.h
 
-          # The wxWidgets-wasm top-level configure script accepts the Emscripten
-          # host alias, but the bundled Expat configure script has an older
-          # config.sub which rejects the plain "emscripten" host name. Reuse
-          # wxWidgets' working config.sub/config.guess for that nested build.
+          # The bundled Expat config.sub in this old wxWidgets WASM port does
+          # not recognize the Emscripten host name. wxWidgets itself contains
+          # a newer config.sub/config.guess, so use those for the nested Expat
+          # configure step.
           test -f config.sub
           test -f config.guess
           test -f src/expat/expat/conftools/config.sub
