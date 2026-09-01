@@ -17,46 +17,6 @@ inline std::string MakeSelector()
 {
     return std::string("#fs-wasm-glcanvas-") + std::to_string(gNextCanvasId.fetch_add(1));
 }
-
-EM_JS(void, CreateCanvasElement, (const char * selector),
-{
-    const id = UTF8ToString(selector).substring(1);
-    if (document.getElementById(id)) return;
-
-    const canvas = document.createElement('canvas');
-    canvas.id = id;
-    canvas.style.position = 'fixed';
-    canvas.style.margin = '0';
-    canvas.style.padding = '0';
-    canvas.style.border = '0';
-    canvas.style.pointerEvents = 'none';
-    canvas.style.display = 'block';
-    canvas.style.zIndex = '5';
-    document.body.appendChild(canvas);
-});
-
-EM_JS(void, DestroyCanvasElement, (const char * selector),
-{
-    const canvas = document.querySelector(UTF8ToString(selector));
-    if (canvas) canvas.remove();
-});
-
-EM_JS(void, SyncCanvasElement, (const char * selector, int x, int y, int width, int height),
-{
-    const canvas = document.querySelector(UTF8ToString(selector));
-    if (!canvas) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    canvas.style.left = `${x}px`;
-    canvas.style.top = `${y}px`;
-    canvas.style.width = `${Math.max(1, width)}px`;
-    canvas.style.height = `${Math.max(1, height)}px`;
-
-    const pixelWidth = Math.max(1, Math.round(width * dpr));
-    const pixelHeight = Math.max(1, Math.round(height * dpr));
-    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
-    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
-});
 }
 
 class wxGLAttributes
@@ -77,7 +37,7 @@ class wxGLContext
 {
 public:
     explicit wxGLContext(wxGLCanvas * canvas);
-    ~wxGLContext();
+    ~wxGLContext() = default;
 
     bool SetCurrent(wxGLCanvas & canvas) const;
 
@@ -104,7 +64,22 @@ public:
         , mCanvasSelector(floating_sandbox_wasm_gl::MakeSelector())
         , mContext(0)
     {
-        floating_sandbox_wasm_gl::CreateCanvasElement(mCanvasSelector.c_str());
+        EM_ASM({
+            const selector = UTF8ToString($0);
+            const id = selector.substring(1);
+            if (!document.getElementById(id)) {
+                const canvas = document.createElement('canvas');
+                canvas.id = id;
+                canvas.style.position = 'fixed';
+                canvas.style.margin = '0';
+                canvas.style.padding = '0';
+                canvas.style.border = '0';
+                canvas.style.pointerEvents = 'none';
+                canvas.style.display = 'block';
+                canvas.style.zIndex = '5';
+                document.body.appendChild(canvas);
+            }
+        }, mCanvasSelector.c_str());
 
         EmscriptenWebGLContextAttributes attrs;
         emscripten_webgl_init_context_attributes(&attrs);
@@ -144,12 +119,20 @@ public:
             mContext = 0;
         }
 
-        floating_sandbox_wasm_gl::DestroyCanvasElement(mCanvasSelector.c_str());
+        EM_ASM({
+            const selector = UTF8ToString($0);
+            const canvas = document.querySelector(selector);
+            if (canvas) canvas.remove();
+        }, mCanvasSelector.c_str());
     }
 
     bool SetCurrent()
     {
-        return SetCurrentContext(mContext);
+        if (mContext <= 0)
+            return false;
+
+        SyncCanvas();
+        return emscripten_webgl_make_context_current(mContext) == EMSCRIPTEN_RESULT_SUCCESS;
     }
 
     void SwapBuffers()
@@ -170,25 +153,36 @@ public:
     }
 
 private:
-    bool SetCurrentContext(EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context)
-    {
-        if (context <= 0)
-            return false;
-
-        SyncCanvas();
-        return emscripten_webgl_make_context_current(context) == EMSCRIPTEN_RESULT_SUCCESS;
-    }
-
-    void SyncCanvas()
+    void SyncCanvas() const
     {
         wxPoint const screenPos = GetScreenPosition();
         wxSize const size = GetSize();
-        floating_sandbox_wasm_gl::SyncCanvasElement(
-            mCanvasSelector.c_str(),
-            screenPos.x,
-            screenPos.y,
-            size.GetWidth(),
-            size.GetHeight());
+        const int x = screenPos.x;
+        const int y = screenPos.y;
+        const int width = size.GetWidth();
+        const int height = size.GetHeight();
+
+        EM_ASM({
+            const selector = UTF8ToString($0);
+            const canvas = document.querySelector(selector);
+            if (!canvas) return;
+
+            const dpr = window.devicePixelRatio || 1;
+            const x = $1;
+            const y = $2;
+            const width = Math.max(1, $3);
+            const height = Math.max(1, $4);
+
+            canvas.style.left = `${x}px`;
+            canvas.style.top = `${y}px`;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+
+            const pixelWidth = Math.max(1, Math.round(width * dpr));
+            const pixelHeight = Math.max(1, Math.round(height * dpr));
+            if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+            if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+        }, mCanvasSelector.c_str(), x, y, width, height);
     }
 
 private:
@@ -203,24 +197,13 @@ inline wxGLContext::wxGLContext(wxGLCanvas * canvas)
 {
 }
 
-inline wxGLContext::~wxGLContext() = default;
-
 inline bool wxGLContext::SetCurrent(wxGLCanvas & canvas) const
 {
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = mContext > 0 ? mContext : canvas.GetWasmContext();
     if (context <= 0)
         return false;
 
-    wxPoint const screenPos = canvas.GetScreenPosition();
-    wxSize const size = canvas.GetSize();
-    floating_sandbox_wasm_gl::SyncCanvasElement(
-        canvas.GetWasmCanvasSelector(),
-        screenPos.x,
-        screenPos.y,
-        size.GetWidth(),
-        size.GetHeight());
-
-    return emscripten_webgl_make_context_current(context) == EMSCRIPTEN_RESULT_SUCCESS;
+    return canvas.SetCurrent();
 }
 
 #else
