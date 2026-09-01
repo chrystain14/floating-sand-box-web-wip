@@ -153,7 +153,7 @@ jobs:
 
       - name: Build SFML 2.5.1 for WebAssembly
         run: |
-          set -eux
+          set -euxo pipefail
           git clone --depth 1 --branch 2.5.1 https://github.com/SFML/SFML.git sfml-src
           export CXXFLAGS="-fexceptions -pthread"
           export LDFLAGS="-pthread -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
@@ -169,9 +169,9 @@ jobs:
             -DSFML_BUILD_GRAPHICS=OFF \
             -DSFML_BUILD_AUDIO=ON \
             -DSFML_BUILD_NETWORK=ON \
-            -DSFML_USE_SYSTEM_DEPS=OFF
-          cmake --build sfml-build --parallel 2
-          cmake --install sfml-build
+            -DSFML_USE_SYSTEM_DEPS=OFF 2>&1 | tee "$GITHUB_WORKSPACE/sfml-configure.log"
+          cmake --build sfml-build --parallel 2 2>&1 | tee "$GITHUB_WORKSPACE/sfml-build.log"
+          cmake --install sfml-build 2>&1 | tee "$GITHUB_WORKSPACE/sfml-install.log"
           test -f sfml-install/include/SFML/Audio.hpp
           test -f sfml-install/lib/libsfml-system-s.a
           test -f sfml-install/lib/libsfml-network-s.a
@@ -223,6 +223,16 @@ jobs:
           if [ -f wasm-port-build/CMakeCache.txt ]; then
             grep -E 'PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML|OPENGL|GTEST|CMAKE_CXX_COMPILER' wasm-port-build/CMakeCache.txt || true
           fi
+          echo '=== SFML diagnostic logs ==='
+          for f in sfml-configure.log sfml-build.log sfml-install.log; do
+            if [ -f "$f" ]; then
+              echo "--- $f (tail 250) ---"
+              tail -n 250 "$f" || true
+            fi
+          done
+          if [ -d sfml-build ]; then
+            find sfml-build -maxdepth 4 -type f \( -name '*.log' -o -name 'CMakeError.log' -o -name 'CMakeOutput.log' \) -print | sort || true
+          fi
           echo '=== WebAssembly output ==='
           if [ -d wasm-port-build ]; then
             find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
@@ -240,4 +250,8 @@ jobs:
             wasm-port-build/**/*.data
             wasm-port-build/CMakeCache.txt
             wasm-port-build/CMakeFiles/**/*.log
+            sfml-configure.log
+            sfml-build.log
+            sfml-install.log
+            sfml-build/CMakeFiles/**/*.log
           if-no-files-found: ignore
