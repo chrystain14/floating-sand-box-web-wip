@@ -28,6 +28,22 @@ replace_once(
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")''',
 )
 
+# SFML 2.5.1 has no miscellaneous-install-directory case for Emscripten.
+# Without one, SFML_MISC_INSTALL_PREFIX becomes empty and its top-level
+# install(FILES ...) commands fail during CMake configuration.
+sfml_root = SFML_ROOT / "CMakeLists.txt"
+replace_once(
+    sfml_root,
+    '''elseif(SFML_OS_ANDROID)
+    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)
+endif()''',
+    '''elseif(SFML_OS_ANDROID)
+    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)
+elseif(SFML_OS_EMSCRIPTEN)
+    set(DEFAULT_INSTALL_MISC_DIR .)
+endif()''',
+)
+
 modules = SFML_ROOT / "cmake/Modules"
 modules.mkdir(parents=True, exist_ok=True)
 
@@ -94,7 +110,6 @@ else()
         ${SRCROOT}/SoundFileFactory.cpp
         ${INCROOT}/SoundFileFactory.hpp
         ${INCROOT}/SoundFileFactory.inl
-        ${INCROOT}/SoundFileReader.hpp
         ${SRCROOT}/SoundFileReaderFlac.hpp
         ${SRCROOT}/SoundFileReaderFlac.cpp
         ${SRCROOT}/SoundFileReaderOgg.hpp
