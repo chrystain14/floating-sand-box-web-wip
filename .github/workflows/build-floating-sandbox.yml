@@ -19,7 +19,7 @@ jobs:
         with:
           version: latest
 
-      - name: Verify Emscripten
+      - name: Verify tools
         run: |
           set -e
           emcc --version
@@ -38,20 +38,32 @@ jobs:
 
           cd Floating-Sandbox
 
-          echo "Official source downloaded."
-          echo "Commit:"
+          echo "Floating Sandbox commit:"
           git rev-parse HEAD
 
-      - name: Inspect source
+      - name: Download PicoJSON
         run: |
-          cd Floating-Sandbox
+          set -e
 
-          echo "=== Top-level files ==="
-          find . -maxdepth 2 -type f | sort | head -250
+          mkdir -p third_party/picojson
 
-          echo
-          echo "=== CMake files ==="
-          find . -name "CMakeLists.txt" -type f | sort
+          curl -L \
+            --fail \
+            --retry 3 \
+            https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h \
+            -o third_party/picojson/picojson.h
+
+          test -s third_party/picojson/picojson.h
+
+          echo "PicoJSON downloaded:"
+          ls -lh third_party/picojson/picojson.h
+
+      - name: Inspect PicoJSON finder
+        run: |
+          echo "===== Floating Sandbox FindPicoJSON.cmake ====="
+
+          sed -n '1,160p' \
+            Floating-Sandbox/cmake/FindPicoJSON.cmake
 
       - name: Configure with Emscripten
         shell: bash
@@ -70,6 +82,7 @@ jobs:
             -B build-web \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DPICOJSON_INCLUDE_DIRS="${GITHUB_WORKSPACE}/third_party/picojson" \
             > configure.log 2>&1
 
           RESULT=$?
@@ -80,15 +93,15 @@ jobs:
           echo "========================================"
 
           echo
-          echo "========== LAST 150 LINES =========="
-          tail -n 150 configure.log
+          echo "========== LAST 200 LINES =========="
+          tail -n 200 configure.log
 
           echo
-          echo "========== CMAKE ERRORS =========="
+          echo "========== IMPORTANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|could not find|unsupported|fatal" \
             configure.log \
-            | tail -n 100 || true
+            | tail -n 120 || true
 
           exit $RESULT
 
@@ -97,6 +110,10 @@ jobs:
         shell: bash
         run: |
           set +e
+
+          echo "========================================"
+          echo "Starting Floating Sandbox Emscripten build"
+          echo "========================================"
 
           cmake \
             --build build-web \
@@ -111,33 +128,34 @@ jobs:
           echo "========================================"
 
           echo
-          echo "========== LAST 150 LINES =========="
-          tail -n 150 build.log
+          echo "========== LAST 200 LINES =========="
+          tail -n 200 build.log
 
           echo
-          echo "========== BUILD ERRORS =========="
+          echo "========== IMPORTANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|fatal|undefined reference" \
             build.log \
-            | tail -n 100 || true
+            | tail -n 120 || true
 
           exit $RESULT
 
-      - name: Find generated files
+      - name: Find WebAssembly output
         if: always()
+        shell: bash
         run: |
-          echo "=== WASM ==="
+          echo "===== WASM ====="
           find . -type f -name "*.wasm" -print
 
           echo
-          echo "=== JavaScript ==="
+          echo "===== JavaScript ====="
           find . -type f -name "*.js" \
             -not -path "./.git/*" \
             -print \
-            | head -200
+            | head -250
 
           echo
-          echo "=== DATA ==="
+          echo "===== DATA ====="
           find . -type f -name "*.data" -print
 
       - name: Upload diagnostics
