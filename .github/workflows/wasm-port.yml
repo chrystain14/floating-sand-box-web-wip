@@ -37,6 +37,21 @@ jobs:
             -o third-party/picojson/include/picojson.h
           test -s third-party/picojson/include/picojson.h
 
+      - name: Build ZLIB for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git zlib-src
+          mkdir -p zlib-build zlib-install
+          emcmake cmake -S zlib-src -B zlib-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DZLIB_BUILD_TESTING=OFF
+          cmake --build zlib-build --parallel 2
+          cmake --install zlib-build
+          test -f zlib-install/include/zlib.h
+          test -f zlib-install/lib/libz.a
+
       - name: Show upstream build files
         run: |
           set -eux
@@ -53,6 +68,9 @@ jobs:
             -DFS_BUILD_BENCHMARKS=OFF \
             -DFS_USE_STATIC_LIBS=ON \
             -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" \
+            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
+            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
+            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" \
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
             -DwxWidgets_USE_STATIC=ON
@@ -67,7 +85,7 @@ jobs:
         run: |
           set -eux
           echo '=== CMake cache ==='
-          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
+          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
           echo '=== WASM/JS output ==='
           find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
 
