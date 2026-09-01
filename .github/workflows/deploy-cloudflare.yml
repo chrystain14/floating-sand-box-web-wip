@@ -9,6 +9,10 @@ permissions:
   contents: write
   actions: read
 
+concurrency:
+  group: floating-sandbox-deploy
+  cancel-in-progress: true
+
 jobs:
   deploy:
     if: github.event.workflow_run.conclusion == 'success'
@@ -67,13 +71,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Keep the staged build outside git's working tree while we synchronize main.
           rm -rf /tmp/floating-sandbox-publish
           mkdir -p /tmp/floating-sandbox-publish
           cp -a public/floating-sandbox/. /tmp/floating-sandbox-publish/
 
           for attempt in 1 2 3 4 5; do
             echo "Publish attempt $attempt"
+
             git fetch origin main
             git reset --hard origin/main
             git clean -fd public || true
@@ -93,7 +97,9 @@ jobs:
 
             git commit -m "Publish Floating Sandbox browser build"
 
-            if git push origin HEAD:main; then
+            # Rebase onto the newest remote main before pushing. This handles
+            # another automated job publishing between fetch and push.
+            if git pull --rebase --autostash origin main && git push origin HEAD:main; then
               echo "Browser build published successfully."
               break
             fi
@@ -105,7 +111,7 @@ jobs:
 
             echo "Remote main changed; retrying with latest main..."
             git reset --hard origin/main
-            sleep 2
+            sleep 3
           done
 
       - name: Install Wrangler
