@@ -66,97 +66,24 @@ jobs:
 
           test -s third_party/picojson/picojson.h
 
-      - name: Build Emscripten image libraries
+          echo "PicoJSON downloaded:"
+          ls -lh third_party/picojson/picojson.h
+
+      - name: Prepare Emscripten libraries
         shell: bash
         run: |
           set -e
 
-          echo "Building zlib..."
+          echo "Preparing zlib..."
           embuilder build zlib
 
           echo
-          echo "Building libjpeg..."
+          echo "Preparing libjpeg..."
           embuilder build libjpeg
 
           echo
-          echo "Building libpng..."
+          echo "Preparing libpng..."
           embuilder build libpng
-
-      - name: Locate Emscripten image libraries
-        shell: bash
-        run: |
-          set -e
-
-          SYSROOT="$(emcc --print-sysroot)"
-
-          echo "Emscripten sysroot:"
-          echo "$SYSROOT"
-
-          echo
-          echo "Searching for JPEG..."
-          JPEG_LIB="$(find "$SYSROOT" -type f \( \
-            -name 'libjpeg.a' -o \
-            -name 'libjpeg.so' \
-          \) | head -n 1)"
-
-          if [ -z "$JPEG_LIB" ]; then
-            echo "JPEG library was not found."
-            exit 1
-          fi
-
-          echo "JPEG_LIB=$JPEG_LIB"
-
-          echo
-          echo "Searching for PNG..."
-          PNG_LIB="$(find "$SYSROOT" -type f \( \
-            -name 'libpng16.a' -o \
-            -name 'libpng.a' \
-            \) | head -n 1)"
-
-          if [ -z "$PNG_LIB" ]; then
-            echo "PNG library was not found."
-            exit 1
-          fi
-
-          echo "PNG_LIB=$PNG_LIB"
-
-          echo
-          echo "Searching for ZLIB..."
-          ZLIB_LIB="$(find "$SYSROOT" -type f \( \
-            -name 'libz.a' -o \
-            -name 'libz.so' \
-          \) | head -n 1)"
-
-          if [ -z "$ZLIB_LIB" ]; then
-            echo "ZLIB library was not found."
-            exit 1
-          fi
-
-          echo "ZLIB_LIB=$ZLIB_LIB"
-
-          echo
-          echo "Saving library paths..."
-
-          {
-            echo "JPEG_LIB=$JPEG_LIB"
-            echo "PNG_LIB=$PNG_LIB"
-            echo "ZLIB_LIB=$ZLIB_LIB"
-            echo "EMSYSROOT=$SYSROOT"
-          } >> "$GITHUB_ENV"
-
-      - name: Create browser settings
-        shell: bash
-        run: |
-          set -e
-
-          cat > Floating-Sandbox/UserSettings.cmake <<'EOF'
-          # Browser/Emscripten build settings
-
-          set(FS_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-          set(FS_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
-          EOF
-
-          cat Floating-Sandbox/UserSettings.cmake
 
       - name: Configure with Emscripten
         shell: bash
@@ -178,12 +105,6 @@ jobs:
             -DFS_BUILD_BENCHMARKS=OFF \
             -DPICOJSON_INCLUDE_DIRS="${GITHUB_WORKSPACE}/third_party/picojson" \
             -DZLIB_USE_STATIC_LIBS=ON \
-            -DZLIB_LIBRARY="${ZLIB_LIB}" \
-            -DZLIB_INCLUDE_DIR="${EMSYSROOT}/include" \
-            -DJPEG_LIBRARY="${JPEG_LIB}" \
-            -DJPEG_INCLUDE_DIR="${EMSYSROOT}/include" \
-            -DPNG_LIBRARY="${PNG_LIB}" \
-            -DPNG_PNG_INCLUDE_DIR="${EMSYSROOT}/include" \
             -DCMAKE_C_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
             -DCMAKE_CXX_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
             > configure.log 2>&1
@@ -215,7 +136,7 @@ jobs:
           set +e
 
           echo "========================================"
-          echo "Starting Floating Sandbox build"
+          echo "Starting Floating Sandbox Emscripten build"
           echo "========================================"
 
           cmake \
@@ -269,5 +190,4 @@ jobs:
             configure.log
             build.log
             build-web/**
-            Floating-Sandbox/UserSettings.cmake
           if-no-files-found: ignore
