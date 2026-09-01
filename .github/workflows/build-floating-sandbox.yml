@@ -20,8 +20,8 @@ jobs:
         run: |
           emcc --version
           em++ --version
-          emcmake --version
           cmake --version
+          ninja --version
 
       - name: Download Floating Sandbox
         run: |
@@ -32,6 +32,50 @@ jobs:
       - name: Show source
         run: |
           cd Floating-Sandbox
+
           echo "Floating Sandbox source downloaded."
+          echo
+
+          echo "Git commit:"
           git rev-parse HEAD
-          find Sources -maxdepth 2 -name CMakeLists.txt | sort
+
+          echo
+          echo "CMake files:"
+          find Sources -maxdepth 3 -name CMakeLists.txt | sort
+
+      - name: Test Emscripten CMake
+        run: |
+          cd Floating-Sandbox
+
+          mkdir -p emscripten-test
+          cd emscripten-test
+
+          emcmake cmake ..
+
+      - name: Show CMake result
+        if: always()
+        run: |
+          echo "===== CMake cache ====="
+
+          if [ -f Floating-Sandbox/emscripten-test/CMakeCache.txt ]; then
+            grep -E "CMAKE_(C|CXX)_COMPILER|CMAKE_SYSTEM_NAME" \
+              Floating-Sandbox/emscripten-test/CMakeCache.txt || true
+          fi
+
+          echo
+          echo "===== Generated files ====="
+
+          find Floating-Sandbox/emscripten-test \
+            -maxdepth 2 \
+            -type f \
+            | sort \
+            | head -200
+
+      - name: Upload CMake diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: floating-sandbox-cmake-test
+          path: |
+            Floating-Sandbox/emscripten-test/**
+          if-no-files-found: ignore
