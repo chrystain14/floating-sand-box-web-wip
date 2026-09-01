@@ -3,12 +3,15 @@ name: Floating Sandbox Web Build
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Emscripten
@@ -16,22 +19,109 @@ jobs:
         with:
           version: latest
 
-      - name: Check tools
+      - name: Verify Emscripten
+        shell: bash
         run: |
+          set -e
+          echo "=== emcc ==="
           emcc --version
+
+          echo
+          echo "=== em++ ==="
           em++ --version
-          emcmake --version
+
+          echo
+          echo "=== cmake ==="
           cmake --version
 
-      - name: Download Floating Sandbox
+          echo
+          echo "=== ninja ==="
+          ninja --version
+
+      - name: Download official Floating Sandbox
+        shell: bash
         run: |
-          git clone --depth 1 \
+          set -e
+
+          git clone \
+            --depth 1 \
             https://github.com/GabrieleGiuseppini/Floating-Sandbox.git \
             Floating-Sandbox
 
-      - name: Show source
-        run: |
+          echo
+          echo "Official Floating Sandbox source downloaded."
+
           cd Floating-Sandbox
-          echo "Floating Sandbox source downloaded."
+
+          echo
+          echo "Commit:"
           git rev-parse HEAD
-          find Sources -maxdepth 2 -name CMakeLists.txt | sort
+
+      - name: Inspect source tree
+        shell: bash
+        run: |
+          set -e
+
+          cd Floating-Sandbox
+
+          echo "=== Top-level ==="
+          find . -maxdepth 2 -type f | sort | head -200
+
+          echo
+          echo "=== CMake files ==="
+          find . -name "CMakeLists.txt" -type f | sort
+
+      - name: Configure with Emscripten
+        shell: bash
+        run: |
+          set -o pipefail
+
+          rm -rf build-web
+          mkdir -p build-web
+
+          echo "=== Running emcmake ==="
+
+          emcmake cmake \
+            -S Floating-Sandbox \
+            -B build-web \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            2>&1 | tee configure.log
+
+      - name: Build with Emscripten
+        shell: bash
+        run: |
+          set -o pipefail
+
+          echo "=== Starting build ==="
+
+          cmake \
+            --build build-web \
+            --parallel 2 \
+            2>&1 | tee build.log
+
+      - name: Search for WebAssembly output
+        if: always()
+        shell: bash
+        run: |
+          echo "=== WASM files ==="
+          find . -type f -name "*.wasm" -print
+
+          echo
+          echo "=== DATA files ==="
+          find . -type f -name "*.data" -print
+
+          echo
+          echo "=== JavaScript files ==="
+          find . -type f -name "*.js" -print | head -200
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: floating-sandbox-build-diagnostics
+          path: |
+            configure.log
+            build.log
+            build-web/**
+          if-no-files-found: ignore
