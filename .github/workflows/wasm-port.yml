@@ -68,6 +68,24 @@ jobs:
           test -f jpeg-install/include/jpeglib.h
           test -f jpeg-install/lib/libjpeg.a
 
+      - name: Build PNG for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch v1.6.50 https://github.com/pnggroup/libpng.git png-src
+          mkdir -p png-build png-install
+          emcmake cmake -S png-src -B png-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" \
+            -DPNG_SHARED=OFF \
+            -DPNG_TESTS=OFF \
+            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
+            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
+            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a"
+          cmake --build png-build --parallel 2
+          cmake --install png-build
+          test -f png-install/include/png.h
+          test -f png-install/lib/libpng16.a
+
       - name: Show upstream build files
         run: |
           set -eux
@@ -89,6 +107,9 @@ jobs:
             -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" \
             -DJPEG_INCLUDE_DIR="$GITHUB_WORKSPACE/jpeg-install/include" \
             -DJPEG_LIBRARY="$GITHUB_WORKSPACE/jpeg-install/lib/libjpeg.a" \
+            -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
+            -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
+            -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" \
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
             -DwxWidgets_USE_STATIC=ON
@@ -103,7 +124,7 @@ jobs:
         run: |
           set -eux
           echo '=== CMake cache ==='
-          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
+          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
           echo '=== WASM/JS output ==='
           find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
 
