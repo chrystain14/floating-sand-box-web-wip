@@ -32,7 +32,7 @@ jobs:
           em++ --version
           command -v emcmake
           emcmake cmake --version
-          echo "EM_SYSROOT=$(emcc -print-sysroot)" >> "$GITHUB_ENV"
+          echo "EM_SYSROOT=$(dirname "$(dirname "$(command -v emcc)")")" >> "$GITHUB_ENV"
 
       - name: Checkout upstream Floating Sandbox
         run: |
@@ -55,8 +55,13 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" \
             -DBUILD_SHARED_LIBS=OFF \
             -DZLIB_BUILD_TESTING=OFF
-          cmake --build zlib-build --parallel 2
+          cmake --build zlib-build --target zlibstatic --parallel 2
+          test -f zlib-build/libz.a
           cmake --install zlib-build
+          mkdir -p zlib-install/include zlib-install/lib
+          cp zlib-src/zlib.h zlib-install/include/zlib.h
+          cp zlib-build/zconf.h zlib-install/include/zconf.h
+          cp zlib-build/libz.a zlib-install/lib/libz.a
           test -f zlib-install/include/zlib.h
           test -f zlib-install/lib/libz.a
 
@@ -219,7 +224,9 @@ jobs:
             grep -E 'PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML|OPENGL|GTEST|CMAKE_CXX_COMPILER' wasm-port-build/CMakeCache.txt || true
           fi
           echo '=== WebAssembly output ==='
-          find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
+          if [ -d wasm-port-build ]; then
+            find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
+          fi
 
       - name: Upload experimental build
         if: always()
