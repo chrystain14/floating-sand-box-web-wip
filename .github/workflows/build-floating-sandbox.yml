@@ -20,24 +20,14 @@ jobs:
           version: latest
 
       - name: Verify tools
-        shell: bash
         run: |
           set -e
-
-          echo "=== Emscripten ==="
           emcc --version
           em++ --version
-
-          echo
-          echo "=== CMake ==="
           cmake --version
-
-          echo
-          echo "=== Ninja ==="
           ninja --version
 
       - name: Download official Floating Sandbox
-        shell: bash
         run: |
           set -e
 
@@ -48,11 +38,10 @@ jobs:
 
           cd Floating-Sandbox
 
-          echo "Floating Sandbox commit:"
+          echo "=== Floating Sandbox commit ==="
           git rev-parse HEAD
 
       - name: Download PicoJSON
-        shell: bash
         run: |
           set -e
 
@@ -66,128 +55,144 @@ jobs:
 
           test -s third_party/picojson/picojson.h
 
-          echo "PicoJSON downloaded:"
-          ls -lh third_party/picojson/picojson.h
-
-      - name: Prepare Emscripten libraries
-        shell: bash
+      - name: Prepare Emscripten image libraries
         run: |
           set -e
 
-          echo "Preparing zlib..."
           embuilder build zlib
-
-          echo
-          echo "Preparing libjpeg..."
           embuilder build libjpeg
-
-          echo
-          echo "Preparing libpng..."
           embuilder build libpng
 
-      - name: Configure with Emscripten
+      - name: Inspect upstream CMake
+        run: |
+          set -e
+
+          echo "=== Top-level CMake ==="
+          sed -n '1,180p' Floating-Sandbox/CMakeLists.txt
+
+          echo
+          echo "=== GameLib CMake ==="
+          sed -n '1,220p' Floating-Sandbox/GameLib/CMakeLists.txt
+
+          echo
+          echo "=== FloatingSandbox CMake ==="
+          sed -n '1,220p' Floating-Sandbox/FloatingSandbox/CMakeLists.txt
+
+      - name: Find desktop-only dependencies
+        run: |
+          echo "=== wxWidgets references ==="
+          grep -Rni "wxWidgets" Floating-Sandbox \
+            --include='CMakeLists.txt' \
+            --include='*.cmake' \
+            || true
+
+          echo
+          echo "=== SFML references ==="
+          grep -Rni "SFML" Floating-Sandbox \
+            --include='CMakeLists.txt' \
+            --include='*.cmake' \
+            || true
+
+          echo
+          echo "=== OpenGL references ==="
+          grep -Rni "OpenGL" Floating-Sandbox \
+            --include='CMakeLists.txt' \
+            --include='*.cmake' \
+            || true
+
+      - name: Attempt GameLib-only Emscripten configuration
         shell: bash
         run: |
           set +e
 
-          rm -rf build-web
-          mkdir -p build-web
+          rm -rf gamelib-web
+          mkdir -p gamelib-web
 
           echo "========================================"
-          echo "Starting Emscripten CMake configuration"
+          echo "Attempting GameLib-only WebAssembly build"
           echo "========================================"
 
           emcmake cmake \
-            -S Floating-Sandbox \
-            -B build-web \
+            -S Floating-Sandbox/GameLib \
+            -B gamelib-web \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DFS_BUILD_BENCHMARKS=OFF \
             -DPICOJSON_INCLUDE_DIRS="${GITHUB_WORKSPACE}/third_party/picojson" \
             -DZLIB_USE_STATIC_LIBS=ON \
             -DCMAKE_C_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
             -DCMAKE_CXX_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
-            > configure.log 2>&1
+            > gamelib-configure.log 2>&1
 
           RESULT=$?
 
           echo
           echo "========================================"
-          echo "CONFIGURE EXIT CODE: $RESULT"
+          echo "GAMELIB CONFIGURE EXIT CODE: $RESULT"
           echo "========================================"
 
           echo
           echo "========== LAST 250 LINES =========="
-          tail -n 250 configure.log
+          tail -n 250 gamelib-configure.log
 
           echo
           echo "========== IMPORTANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|could not find|unsupported|fatal" \
-            configure.log \
+            gamelib-configure.log \
             | tail -n 150 || true
 
           exit $RESULT
 
-      - name: Build with Emscripten
+      - name: Build GameLib
         if: success()
         shell: bash
         run: |
           set +e
 
-          echo "========================================"
-          echo "Starting Floating Sandbox Emscripten build"
-          echo "========================================"
-
           cmake \
-            --build build-web \
+            --build gamelib-web \
             --parallel 2 \
-            > build.log 2>&1
+            > gamelib-build.log 2>&1
 
           RESULT=$?
 
           echo
           echo "========================================"
-          echo "BUILD EXIT CODE: $RESULT"
+          echo "GAMELIB BUILD EXIT CODE: $RESULT"
           echo "========================================"
 
           echo
           echo "========== LAST 250 LINES =========="
-          tail -n 250 build.log
+          tail -n 250 gamelib-build.log
 
           echo
           echo "========== IMPORTANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|fatal|undefined reference|unsupported" \
-            build.log \
+            gamelib-build.log \
             | tail -n 150 || true
 
           exit $RESULT
 
-      - name: Search for generated WebAssembly
+      - name: Search for WebAssembly output
         if: always()
-        shell: bash
         run: |
-          echo "===== WASM ====="
+          echo "=== WASM ==="
           find . -type f -name "*.wasm" -print
 
           echo
-          echo "===== JavaScript ====="
+          echo "=== JavaScript ==="
           find . -type f -name "*.js" \
             -not -path "./.git/*" \
             -print | head -250
-
-          echo
-          echo "===== DATA ====="
-          find . -type f -name "*.data" -print
 
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: floating-sandbox-build-diagnostics
+          name: floating-sandbox-web-diagnostics
           path: |
-            configure.log
-            build.log
-            build-web/**
+            gamelib-configure.log
+            gamelib-build.log
+            gamelib-web/**
           if-no-files-found: ignore
