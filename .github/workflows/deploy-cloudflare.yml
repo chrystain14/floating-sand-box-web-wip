@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download browser build artifact
         uses: actions/download-artifact@v4
@@ -73,12 +75,17 @@ jobs:
         shell: bash
         run: |
           set -e
+          git fetch origin main
+          git checkout -B publish-assets origin/main
+
           cp public/floating-sandbox/index.html ./index.html
           cp public/floating-sandbox/floating-sandbox-web.js ./floating-sandbox-web.js
           cp public/floating-sandbox/floating-sandbox-web.wasm ./floating-sandbox-web.wasm
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f index.html floating-sandbox-web.js floating-sandbox-web.wasm
+
           if git diff --cached --quiet; then
             echo "No Vercel root asset changes."
           else
