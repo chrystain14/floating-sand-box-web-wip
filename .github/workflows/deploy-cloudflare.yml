@@ -28,7 +28,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Stage Cloudflare assets
+      - name: Stage browser build
         shell: bash
         run: |
           set -e
@@ -36,62 +36,77 @@ jobs:
           mkdir -p public/floating-sandbox
           echo "=== Artifact ==="
           find artifact -maxdepth 8 -type f -print | sort
+
           if [ -d "artifact/public/floating-sandbox" ]; then
             cp -a artifact/public/floating-sandbox/. public/floating-sandbox/
           elif [ -d "artifact/floating-sandbox" ]; then
             cp -a artifact/floating-sandbox/. public/floating-sandbox/
           else
-            cp -a artifact/. public/floating-sandbox/
+            find artifact -maxdepth 2 -type f \( -name '*.html' -o -name '*.js' -o -name '*.wasm' -o -name '*.data' \) -exec cp {} public/floating-sandbox/ \;
           fi
-          echo "=== Staged assets ==="
-          find public -maxdepth 8 -type f -print | sort
 
-      - name: Normalize browser filenames
-        shell: bash
-        run: |
-          set -e
           cd public/floating-sandbox
           html="$(find . -maxdepth 1 -type f -name '*.html' | head -n 1)"
           js="$(find . -maxdepth 1 -type f -name '*.js' | head -n 1)"
           wasm="$(find . -maxdepth 1 -type f -name '*.wasm' | head -n 1)"
           [ -n "$html" ] && [ "$html" != "./index.html" ] && mv "$html" index.html || true
-          if [ -n "$js" ] && [ "$js" != "./floating-sandbox-web.js" ]; then mv "$js" floating-sandbox-web.js; fi
-          if [ -n "$wasm" ] && [ "$wasm" != "./floating-sandbox-web.wasm" ]; then mv "$wasm" floating-sandbox-web.wasm; fi
+          [ -n "$js" ] && [ "$js" != "./floating-sandbox-web.js" ] && mv "$js" floating-sandbox-web.js || true
+          [ -n "$wasm" ] && [ "$wasm" != "./floating-sandbox-web.wasm" ] && mv "$wasm" floating-sandbox-web.wasm || true
+          cd ../..
 
-      - name: Verify Cloudflare files
-        shell: bash
-        run: |
-          set -e
-          test -f worker.js
-          test -f wrangler.toml
           test -f public/floating-sandbox/index.html
           test -f public/floating-sandbox/floating-sandbox-web.js
           test -f public/floating-sandbox/floating-sandbox-web.wasm
-          echo "HTML: OK"
-          echo "JavaScript: OK"
-          echo "WASM: OK"
+          echo "=== Browser files ==="
+          find public/floating-sandbox -maxdepth 1 -type f -print | sort
 
-      - name: Publish Vercel site files
+      - name: Publish browser files for Vercel
         shell: bash
         run: |
           set -e
-          git fetch origin main
-          git checkout -B publish-assets origin/main
-
-          cp public/floating-sandbox/index.html ./index.html
-          cp public/floating-sandbox/floating-sandbox-web.js ./floating-sandbox-web.js
-          cp public/floating-sandbox/floating-sandbox-web.wasm ./floating-sandbox-web.wasm
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f index.html floating-sandbox-web.js floating-sandbox-web.wasm
 
-          if git diff --cached --quiet; then
-            echo "No Vercel root asset changes."
-          else
-            git commit -m "Publish browser build for Vercel"
-            git push origin HEAD:main
-          fi
+          # Keep the staged build outside git's working tree while we synchronize main.
+          rm -rf /tmp/floating-sandbox-publish
+          mkdir -p /tmp/floating-sandbox-publish
+          cp -a public/floating-sandbox/. /tmp/floating-sandbox-publish/
+
+          for attempt in 1 2 3 4 5; do
+            echo "Publish attempt $attempt"
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd public || true
+            mkdir -p public/floating-sandbox
+            cp -a /tmp/floating-sandbox-publish/. public/floating-sandbox/
+
+            cp public/floating-sandbox/index.html ./index.html
+            cp public/floating-sandbox/floating-sandbox-web.js ./floating-sandbox-web.js
+            cp public/floating-sandbox/floating-sandbox-web.wasm ./floating-sandbox-web.wasm
+
+            git add -f index.html floating-sandbox-web.js floating-sandbox-web.wasm public/floating-sandbox
+
+            if git diff --cached --quiet; then
+              echo "Browser build is already published."
+              break
+            fi
+
+            git commit -m "Publish Floating Sandbox browser build"
+
+            if git push origin HEAD:main; then
+              echo "Browser build published successfully."
+              break
+            fi
+
+            if [ "$attempt" -eq 5 ]; then
+              echo "Could not publish after 5 attempts."
+              exit 1
+            fi
+
+            echo "Remote main changed; retrying with latest main..."
+            git reset --hard origin/main
+            sleep 2
+          done
 
       - name: Install Wrangler
         run: npm install --global wrangler@latest
