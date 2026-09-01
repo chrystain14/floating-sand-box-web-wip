@@ -1,0 +1,76 @@
+name: Experimental Floating Sandbox WebAssembly Port
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [wasm-port]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: floating-sandbox-wasm-port
+  cancel-in-progress: true
+
+jobs:
+  emscripten-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: latest
+
+      - name: Checkout upstream Floating Sandbox
+        run: |
+          git clone --depth 1 https://github.com/GabrieleGiuseppini/Floating-Sandbox.git upstream-floating-sandbox
+
+      - name: Show upstream build files
+        run: |
+          set -eux
+          cd upstream-floating-sandbox
+          test -f CMakeLists.txt
+          find . -maxdepth 2 -type f \( -name 'CMakeLists.txt' -o -name '*.cmake' \) | sort | head -100
+
+      - name: Configure Emscripten build
+        run: |
+          set -eux
+          mkdir -p wasm-port-build
+          emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFS_BUILD_BENCHMARKS=OFF \
+            -DFS_USE_STATIC_LIBS=ON \
+            -DwxWidgets_USE_DEBUG=OFF \
+            -DwxWidgets_USE_UNICODE=ON \
+            -DwxWidgets_USE_STATIC=ON
+
+      - name: Build
+        run: |
+          set -eux
+          cmake --build wasm-port-build --parallel 2
+
+      - name: Collect build output
+        if: always()
+        run: |
+          set -eux
+          echo '=== CMake cache ==='
+          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
+          echo '=== WASM/JS output ==='
+          find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
+
+      - name: Upload experimental build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: floating-sandbox-emscripten-port-diagnostics
+          path: |
+            wasm-port-build/CMakeCache.txt
+            wasm-port-build/CMakeFiles/**/*.log
+            wasm-port-build/**/*.wasm
+            wasm-port-build/**/*.js
+            wasm-port-build/**/*.html
+            wasm-port-build/**/*.data
+          if-no-files-found: ignore
