@@ -20,26 +20,14 @@ jobs:
           version: latest
 
       - name: Verify Emscripten
-        shell: bash
         run: |
           set -e
-          echo "=== emcc ==="
           emcc --version
-
-          echo
-          echo "=== em++ ==="
           em++ --version
-
-          echo
-          echo "=== cmake ==="
           cmake --version
-
-          echo
-          echo "=== ninja ==="
           ninja --version
 
       - name: Download official Floating Sandbox
-        shell: bash
         run: |
           set -e
 
@@ -48,24 +36,18 @@ jobs:
             https://github.com/GabrieleGiuseppini/Floating-Sandbox.git \
             Floating-Sandbox
 
-          echo
-          echo "Official Floating Sandbox source downloaded."
-
           cd Floating-Sandbox
 
-          echo
+          echo "Official source downloaded."
           echo "Commit:"
           git rev-parse HEAD
 
-      - name: Inspect source tree
-        shell: bash
+      - name: Inspect source
         run: |
-          set -e
-
           cd Floating-Sandbox
 
-          echo "=== Top-level ==="
-          find . -maxdepth 2 -type f | sort | head -200
+          echo "=== Top-level files ==="
+          find . -maxdepth 2 -type f | sort | head -250
 
           echo
           echo "=== CMake files ==="
@@ -74,46 +56,89 @@ jobs:
       - name: Configure with Emscripten
         shell: bash
         run: |
-          set -o pipefail
+          set +e
 
           rm -rf build-web
           mkdir -p build-web
 
-          echo "=== Running emcmake ==="
+          echo "========================================"
+          echo "Starting Emscripten CMake configuration"
+          echo "========================================"
 
           emcmake cmake \
             -S Floating-Sandbox \
             -B build-web \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            2>&1 | tee configure.log
+            > configure.log 2>&1
+
+          RESULT=$?
+
+          echo
+          echo "========================================"
+          echo "CONFIGURE EXIT CODE: $RESULT"
+          echo "========================================"
+
+          echo
+          echo "========== LAST 150 LINES =========="
+          tail -n 150 configure.log
+
+          echo
+          echo "========== CMAKE ERRORS =========="
+          grep -n -i \
+            -E "error|failed|not found|could not find|unsupported|fatal" \
+            configure.log \
+            | tail -n 100 || true
+
+          exit $RESULT
 
       - name: Build with Emscripten
+        if: success()
         shell: bash
         run: |
-          set -o pipefail
-
-          echo "=== Starting build ==="
+          set +e
 
           cmake \
             --build build-web \
             --parallel 2 \
-            2>&1 | tee build.log
+            > build.log 2>&1
 
-      - name: Search for WebAssembly output
+          RESULT=$?
+
+          echo
+          echo "========================================"
+          echo "BUILD EXIT CODE: $RESULT"
+          echo "========================================"
+
+          echo
+          echo "========== LAST 150 LINES =========="
+          tail -n 150 build.log
+
+          echo
+          echo "========== BUILD ERRORS =========="
+          grep -n -i \
+            -E "error|failed|not found|fatal|undefined reference" \
+            build.log \
+            | tail -n 100 || true
+
+          exit $RESULT
+
+      - name: Find generated files
         if: always()
-        shell: bash
         run: |
-          echo "=== WASM files ==="
+          echo "=== WASM ==="
           find . -type f -name "*.wasm" -print
 
           echo
-          echo "=== DATA files ==="
-          find . -type f -name "*.data" -print
+          echo "=== JavaScript ==="
+          find . -type f -name "*.js" \
+            -not -path "./.git/*" \
+            -print \
+            | head -200
 
           echo
-          echo "=== JavaScript files ==="
-          find . -type f -name "*.js" -print | head -200
+          echo "=== DATA ==="
+          find . -type f -name "*.data" -print
 
       - name: Upload diagnostics
         if: always()
