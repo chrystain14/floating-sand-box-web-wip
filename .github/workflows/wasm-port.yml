@@ -86,17 +86,40 @@ jobs:
           test -f png-install/include/png.h
           test -f png-install/lib/libpng16.a
 
-      - name: Show upstream build files
+      - name: Build wxWidgets for WebAssembly
         run: |
           set -eux
-          cd upstream-floating-sandbox
-          test -f CMakeLists.txt
-          find . -maxdepth 2 -type f \( -name 'CMakeLists.txt' -o -name '*.cmake' \) | sort | head -100
+          git clone --depth 1 https://github.com/ahilss/wxWidgets-wasm.git wxwidgets-src
+          cd wxwidgets-src
+          git submodule update --init src/jpeg 3rdparty/catch
+          export CFLAGS="-I$EMSDK/upstream/emscripten/system/include"
+          export CXXFLAGS="-I$EMSDK/upstream/emscripten/system/include"
+          export LDFLAGS="-L$EMSDK/upstream/emscripten/system/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
+          emconfigure ./configure \
+            --host=emscripten \
+            --with-cxx=14 \
+            --enable-utf8 \
+            --enable-universal \
+            --disable-shared \
+            --disable-exceptions \
+            --disable-richtext \
+            --without-libtiff \
+            --disable-xlocale
+          emmake make -j2
+          mkdir -p "$GITHUB_WORKSPACE/wxwidgets-install"
+          emmake make install PREFIX="$GITHUB_WORKSPACE/wxwidgets-install"
+          test -f "$GITHUB_WORKSPACE/wxwidgets-install/bin/wx-config" || test -f "$GITHUB_WORKSPACE/wxwidgets-install/bin/wx-config-3.1"
 
       - name: Configure Emscripten build
         run: |
           set -eux
           mkdir -p wasm-port-build
+          WX_CONFIG=$(find "$GITHUB_WORKSPACE/wxwidgets-install" -type f -name 'wx-config*' -print -quit)
+          test -n "$WX_CONFIG"
+          chmod +x "$WX_CONFIG"
+          export WX_CONFIG
+          export PATH="$(dirname "$WX_CONFIG"):$PATH"
+          wx-config --version || true
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DFS_BUILD_BENCHMARKS=OFF \
@@ -110,6 +133,8 @@ jobs:
             -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
             -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
             -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" \
+            -DwxWidgets_ROOT="$GITHUB_WORKSPACE/wxwidgets-install" \
+            -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
             -DwxWidgets_USE_STATIC=ON
