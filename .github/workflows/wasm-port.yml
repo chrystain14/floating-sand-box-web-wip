@@ -146,7 +146,7 @@ jobs:
           #include <vorbis/vorbisfile.h>
           int main() { return AL_NO_ERROR; }
           CPP
-          em++ /tmp/audio-probe.cpp --use-port=ogg --use-port=vorbis -lopenal -o /tmp/audio-probe.js
+          em++ /tmp/audio-probe.cpp -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal -o /tmp/audio-probe.js
           test -s /tmp/audio-probe.js
           test -f "$EM_SYSROOT/include/AL/al.h"
           test -f "$EM_SYSROOT/include/vorbis/vorbisfile.h"
@@ -156,7 +156,7 @@ jobs:
           set -eux
           git clone --depth 1 --branch 2.5.1 https://github.com/SFML/SFML.git sfml-src
           export CXXFLAGS="-fexceptions -pthread"
-          export LDFLAGS="-pthread --use-port=ogg --use-port=vorbis -lopenal"
+          export LDFLAGS="-pthread -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
           python3 -m py_compile wasm-compat/prepare_wasm_build.py
           python3 wasm-compat/prepare_wasm_build.py
           emcmake cmake -S sfml-src -B sfml-build \
@@ -187,8 +187,8 @@ jobs:
         run: |
           set -eux
           rm -rf wasm-port-build
-          export CXXFLAGS="$(wx-config --cxxflags) -I$GITHUB_WORKSPACE/wasm-compat -fexceptions -pthread -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 --use-port=ogg --use-port=vorbis"
-          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -fexceptions -pthread -sDISABLE_EXCEPTION_CATCHING=0 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 --use-port=ogg --use-port=vorbis -lopenal"
+          export CXXFLAGS="$(wx-config --cxxflags) -I$GITHUB_WORKSPACE/wasm-compat -fexceptions -pthread -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -fexceptions -pthread -sDISABLE_EXCEPTION_CATCHING=0 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DFS_BUILD_BENCHMARKS=OFF \
