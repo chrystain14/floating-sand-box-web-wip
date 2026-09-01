@@ -26,7 +26,16 @@ jobs:
 
       - name: Checkout upstream Floating Sandbox
         run: |
+          set -eux
           git clone --depth 1 https://github.com/GabrieleGiuseppini/Floating-Sandbox.git upstream-floating-sandbox
+
+      - name: Install PicoJSON
+        run: |
+          set -eux
+          mkdir -p third-party/picojson/include
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h \
+            -o third-party/picojson/include/picojson.h
+          test -s third-party/picojson/include/picojson.h
 
       - name: Show upstream build files
         run: |
@@ -43,6 +52,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DFS_BUILD_BENCHMARKS=OFF \
             -DFS_USE_STATIC_LIBS=ON \
+            -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" \
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
             -DwxWidgets_USE_STATIC=ON
@@ -57,7 +67,7 @@ jobs:
         run: |
           set -eux
           echo '=== CMake cache ==='
-          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
+          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
           echo '=== WASM/JS output ==='
           find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
 
