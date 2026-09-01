@@ -167,22 +167,22 @@ jobs:
             -DSFML_USE_SYSTEM_DEPS=OFF
           cmake --build sfml-build --parallel 2
           cmake --install sfml-build
+          test -f sfml-install/include/SFML/Audio.hpp
           test -f sfml-install/lib/libsfml-system-s.a
           test -f sfml-install/lib/libsfml-network-s.a
           test -f sfml-install/lib/libsfml-audio-s.a
 
-      - name: Prepare Floating Sandbox compatibility
+      - name: Checkout GoogleTest sources
         run: |
           set -eux
-          test -s wasm-compat/wx/glcanvas.h
-          python3 wasm-compat/prepare_wasm_build.py
+          git clone --depth 1 --branch release-1.12.1 https://github.com/google/googletest.git third-party/googletest
+          test -d third-party/googletest/googletest
 
       - name: Configure Floating Sandbox
         run: |
           set -eux
           rm -rf wasm-port-build
-          WX_CXXFLAGS="$(wx-config --cxxflags)"
-          export CXXFLAGS="$WX_CXXFLAGS -I$GITHUB_WORKSPACE/wasm-compat -fexceptions -pthread -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
+          export CXXFLAGS="$(wx-config --cxxflags) -I$GITHUB_WORKSPACE/wasm-compat -fexceptions -pthread -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
           export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -fexceptions -pthread -sDISABLE_EXCEPTION_CATCHING=0 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
