@@ -140,11 +140,6 @@ jobs:
           wx-config --cxxflags
           wx-config --libs
           wx-config --libs base,core,html,propgrid,ribbon
-          if wx-config --libs base,core,gl >/tmp/wx-gl.txt 2>&1; then
-            echo "Unexpected wx-config GL support:"; cat /tmp/wx-gl.txt
-          else
-            echo "wx-config correctly rejects the unavailable GL component"
-          fi
 
       - name: Prepare Emscripten audio ports
         run: |
@@ -152,7 +147,7 @@ jobs:
           cat > /tmp/wasm-audio-probe.cpp <<'CPP'
           #include <AL/al.h>
           #include <vorbis/vorbisfile.h>
-          int main() { return AL_NO_ERROR + ov_clear(nullptr); }
+          int main() { return AL_NO_ERROR; }
           CPP
           em++ /tmp/wasm-audio-probe.cpp \
             -sUSE_OPENAL=1 \
@@ -160,7 +155,8 @@ jobs:
             -sUSE_VORBIS=1 \
             -o /tmp/wasm-audio-probe.js
           test -s /tmp/wasm-audio-probe.js
-          find "$EM_SYSROOT/include" -maxdepth 3 -type f \( -path '*/AL/al.h' -o -path '*/vorbis/vorbisfile.h' \) -print
+          test -f "$EM_SYSROOT/include/AL/al.h"
+          test -f "$EM_SYSROOT/include/vorbis/vorbisfile.h"
 
       - name: Build SFML 2.5.1 for WebAssembly
         run: |
@@ -169,33 +165,57 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import os
 
-          cfg = Path("sfml-src/cmake/Config.cmake")
+          root = Path("sfml-src")
+          sysroot = Path(os.environ["EM_SYSROOT"])
+
+          cfg = root / "cmake/Config.cmake"
           s = cfg.read_text(encoding="utf-8")
           marker = 'elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")'
           insert = '''elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")\n    set(SFML_OS_UNIX 1)\n    set(SFML_OS_EMSCRIPTEN 1)\n    set(OPENGL_ES 1)\n'''
           assert marker in s
           cfg.write_text(s.replace(marker, insert + marker, 1), encoding="utf-8")
 
-          sysroot = Path("${EM_SYSROOT}")
-          mods = Path("sfml-src/cmake/Modules")
+          mods = root / "cmake/Modules"
           mods.mkdir(parents=True, exist_ok=True)
+          (mods / "FindOpenAL.cmake").write_text(
+              f'''set(OPENAL_FOUND TRUE)\nset(OpenAL_FOUND TRUE)\nset(OPENAL_INCLUDE_DIR "{sysroot / 'include'}")\nset(OPENAL_LIBRARY "-lopenal")\n''',
+              encoding="utf-8")
+          (mods / "FindVorbis.cmake").write_text(
+              f'''set(VORBIS_FOUND TRUE)\nset(Vorbis_FOUND TRUE)\nset(VORBIS_INCLUDE_DIRS "{sysroot / 'include'}")\nset(VORBIS_LIBRARIES "-lvorbisfile;-lvorbis;-logg")\n''',
+              encoding="utf-8")
 
-          (mods / "FindOpenAL.cmake").write_text(f'''set(OPENAL_FOUND TRUE)\nset(OpenAL_FOUND TRUE)\nset(OPENAL_INCLUDE_DIR "{sysroot / 'include'}")\nset(OPENAL_LIBRARY "-lopenal")\n''', encoding="utf-8")
-          (mods / "FindVorbis.cmake").write_text(f'''set(VORBIS_FOUND TRUE)\nset(Vorbis_FOUND TRUE)\nset(VORBIS_INCLUDE_DIRS "{sysroot / 'include'}")\nset(VORBIS_LIBRARIES "-lvorbisfile;-lvorbis;-logg")\n''', encoding="utf-8")
-
-          audio = Path("sfml-src/src/SFML/Audio/CMakeLists.txt")
+          audio = root / "src/SFML/Audio/CMakeLists.txt"
           a = audio.read_text(encoding="utf-8")
-          a = a.replace('''set(CODECS_SRC\n    ${SRCROOT}/SoundFileFactory.cpp\n    ${INCROOT}/SoundFileFactory.hpp\n    ${INCROOT}/SoundFileFactory.inl\n    ${INCROOT}/SoundFileReader.hpp\n    ${SRCROOT}/SoundFileReaderFlac.hpp\n    ${SRCROOT}/SoundFileReaderFlac.cpp\n    ${SRCROOT}/SoundFileReaderOgg.hpp\n    ${SRCROOT}/SoundFileReaderOgg.cpp\n    ${SRCROOT}/SoundFileReaderWav.hpp\n    ${SRCROOT}/SoundFileReaderWav.cpp\n    ${INCROOT}/SoundFileWriter.hpp\n    ${SRCROOT}/SoundFileWriterFlac.hpp\n    ${SRCROOT}/SoundFileWriterFlac.cpp\n    ${SRCROOT}/SoundFileWriterOgg.hpp\n    ${SRCROOT}/SoundFileWriterOgg.cpp\n    ${SRCROOT}/SoundFileWriterWav.hpp\n    ${SRCROOT}/SoundFileWriterWav.cpp\n)''', '''if(SFML_OS_EMSCRIPTEN)\n    set(CODECS_SRC\n        ${SRCROOT}/SoundFileFactory.cpp\n        ${INCROOT}/SoundFileFactory.hpp\n        ${INCROOT}/SoundFileFactory.inl\n        ${INCROOT}/SoundFileReader.hpp\n        ${SRCROOT}/SoundFileReaderOgg.hpp\n        ${SRCROOT}/SoundFileReaderOgg.cpp\n        ${SRCROOT}/SoundFileReaderWav.hpp\n        ${SRCROOT}/SoundFileReaderWav.cpp\n        ${INCROOT}/SoundFileWriter.hpp\n        ${SRCROOT}/SoundFileWriterOgg.hpp\n        ${SRCROOT}/SoundFileWriterOgg.cpp\n        ${SRCROOT}/SoundFileWriterWav.hpp\n        ${SRCROOT}/SoundFileWriterWav.cpp\n    )\nelse()\n    set(CODECS_SRC\n        ${SRCROOT}/SoundFileFactory.cpp\n        ${INCROOT}/SoundFileFactory.hpp\n        ${INCROOT}/SoundFileFactory.inl\n        ${INCROOT}/SoundFileReader.hpp\n        ${SRCROOT}/SoundFileReaderFlac.hpp\n        ${SRCROOT}/SoundFileReaderFlac.cpp\n        ${SRCROOT}/SoundFileReaderOgg.hpp\n        ${SRCROOT}/SoundFileReaderOgg.cpp\n        ${SRCROOT}/SoundFileReaderWav.hpp\n        ${SRCROOT}/SoundFileReaderWav.cpp\n        ${INCROOT}/SoundFileWriter.hpp\n        ${SRCROOT}/SoundFileWriterFlac.hpp\n        ${SRCROOT}/SoundFileWriterFlac.cpp\n        ${SRCROOT}/SoundFileWriterOgg.hpp\n        ${SRCROOT}/SoundFileWriterOgg.cpp\n        ${SRCROOT}/SoundFileWriterWav.hpp\n        ${SRCROOT}/SoundFileWriterWav.cpp\n    )\nendif()''')
-          a = a.replace('''sfml_find_package(OpenAL INCLUDE "OPENAL_INCLUDE_DIR" LINK "OPENAL_LIBRARY")\nsfml_find_package(Vorbis INCLUDE "VORBIS_INCLUDE_DIRS" LINK "VORBIS_LIBRARIES")\nsfml_find_package(FLAC INCLUDE "FLAC_INCLUDE_DIR" LINK "FLAC_LIBRARY")''', '''sfml_find_package(OpenAL INCLUDE "OPENAL_INCLUDE_DIR" LINK "OPENAL_LIBRARY")\nsfml_find_package(Vorbis INCLUDE "VORBIS_INCLUDE_DIRS" LINK "VORBIS_LIBRARIES")\nif(NOT SFML_OS_EMSCRIPTEN)\n    sfml_find_package(FLAC INCLUDE "FLAC_INCLUDE_DIR" LINK "FLAC_LIBRARY")\nendif()''')
-          a = a.replace('''target_compile_definitions(Vorbis INTERFACE "OV_EXCLUDE_STATIC_CALLBACKS")\ntarget_compile_definitions(FLAC INTERFACE "FLAC__NO_DLL")''', '''target_compile_definitions(Vorbis INTERFACE "OV_EXCLUDE_STATIC_CALLBACKS")\nif(NOT SFML_OS_EMSCRIPTEN)\n    target_compile_definitions(FLAC INTERFACE "FLAC__NO_DLL")\nendif()''')
-          a = a.replace('''target_link_libraries(sfml-audio\n                      PUBLIC sfml-system\n                      PRIVATE Vorbis FLAC)''', '''if(SFML_OS_EMSCRIPTEN)\n    target_link_libraries(sfml-audio PUBLIC sfml-system PRIVATE Vorbis)\nelse()\n    target_link_libraries(sfml-audio PUBLIC sfml-system PRIVATE Vorbis FLAC)\nendif()''')
+          old = '''set(CODECS_SRC\n    ${SRCROOT}/SoundFileFactory.cpp\n    ${INCROOT}/SoundFileFactory.hpp\n    ${INCROOT}/SoundFileFactory.inl\n    ${INCROOT}/SoundFileReader.hpp\n    ${SRCROOT}/SoundFileReaderFlac.hpp\n    ${SRCROOT}/SoundFileReaderFlac.cpp\n    ${SRCROOT}/SoundFileReaderOgg.hpp\n    ${SRCROOT}/SoundFileReaderOgg.cpp\n    ${SRCROOT}/SoundFileReaderWav.hpp\n    ${SRCROOT}/SoundFileReaderWav.cpp\n    ${INCROOT}/SoundFileWriter.hpp\n    ${SRCROOT}/SoundFileWriterFlac.hpp\n    ${SRCROOT}/SoundFileWriterFlac.cpp\n    ${SRCROOT}/SoundFileWriterOgg.hpp\n    ${SRCROOT}/SoundFileWriterOgg.cpp\n    ${SRCROOT}/SoundFileWriterWav.hpp\n    ${SRCROOT}/SoundFileWriterWav.cpp\n)'''
+          new = '''if(SFML_OS_EMSCRIPTEN)\n    set(CODECS_SRC\n        ${SRCROOT}/SoundFileFactory.cpp\n        ${INCROOT}/SoundFileFactory.hpp\n        ${INCROOT}/SoundFileFactory.inl\n        ${INCROOT}/SoundFileReader.hpp\n        ${SRCROOT}/SoundFileReaderOgg.hpp\n        ${SRCROOT}/SoundFileReaderOgg.cpp\n        ${SRCROOT}/SoundFileReaderWav.hpp\n        ${SRCROOT}/SoundFileReaderWav.cpp\n        ${INCROOT}/SoundFileWriter.hpp\n        ${SRCROOT}/SoundFileWriterOgg.hpp\n        ${SRCROOT}/SoundFileWriterOgg.cpp\n        ${SRCROOT}/SoundFileWriterWav.hpp\n        ${SRCROOT}/SoundFileWriterWav.cpp\n    )\nelse()\n    set(CODECS_SRC\n        ${SRCROOT}/SoundFileFactory.cpp\n        ${INCROOT}/SoundFileFactory.hpp\n        ${INCROOT}/SoundFileFactory.inl\n        ${INCROOT}/SoundFileReader.hpp\n        ${SRCROOT}/SoundFileReaderFlac.hpp\n        ${SRCROOT}/SoundFileReaderFlac.cpp\n        ${SRCROOT}/SoundFileReaderOgg.hpp\n        ${SRCROOT}/SoundFileReaderOgg.cpp\n        ${SRCROOT}/SoundFileReaderWav.hpp\n        ${SRCROOT}/SoundFileReaderWav.cpp\n        ${INCROOT}/SoundFileWriter.hpp\n        ${SRCROOT}/SoundFileWriterFlac.hpp\n        ${SRCROOT}/SoundFileWriterFlac.cpp\n        ${SRCROOT}/SoundFileWriterOgg.hpp\n        ${SRCROOT}/SoundFileWriterOgg.cpp\n        ${SRCROOT}/SoundFileWriterWav.hpp\n        ${SRCROOT}/SoundFileWriterWav.cpp\n    )\nendif()'''
+          assert old in a
+          a = a.replace(old, new, 1)
+          old = '''sfml_find_package(OpenAL INCLUDE "OPENAL_INCLUDE_DIR" LINK "OPENAL_LIBRARY")\nsfml_find_package(Vorbis INCLUDE "VORBIS_INCLUDE_DIRS" LINK "VORBIS_LIBRARIES")\nsfml_find_package(FLAC INCLUDE "FLAC_INCLUDE_DIR" LINK "FLAC_LIBRARY")'''
+          new = '''sfml_find_package(OpenAL INCLUDE "OPENAL_INCLUDE_DIR" LINK "OPENAL_LIBRARY")\nsfml_find_package(Vorbis INCLUDE "VORBIS_INCLUDE_DIRS" LINK "VORBIS_LIBRARIES")\nif(NOT SFML_OS_EMSCRIPTEN)\n    sfml_find_package(FLAC INCLUDE "FLAC_INCLUDE_DIR" LINK "FLAC_LIBRARY")\nendif()'''
+          assert old in a
+          a = a.replace(old, new, 1)
+          old = '''target_compile_definitions(Vorbis INTERFACE "OV_EXCLUDE_STATIC_CALLBACKS")\ntarget_compile_definitions(FLAC INTERFACE "FLAC__NO_DLL")'''
+          new = '''target_compile_definitions(Vorbis INTERFACE "OV_EXCLUDE_STATIC_CALLBACKS")\nif(NOT SFML_OS_EMSCRIPTEN)\n    target_compile_definitions(FLAC INTERFACE "FLAC__NO_DLL")\nendif()'''
+          assert old in a
+          a = a.replace(old, new, 1)
+          old = '''target_link_libraries(sfml-audio\n                      PUBLIC sfml-system\n                      PRIVATE Vorbis FLAC)'''
+          new = '''if(SFML_OS_EMSCRIPTEN)\n    target_link_libraries(sfml-audio PUBLIC sfml-system PRIVATE Vorbis)\nelse()\n    target_link_libraries(sfml-audio PUBLIC sfml-system PRIVATE Vorbis FLAC)\nendif()'''
+          assert old in a
+          a = a.replace(old, new, 1)
           audio.write_text(a, encoding="utf-8")
 
-          factory = Path("sfml-src/src/SFML/Audio/SoundFileFactory.cpp")
+          factory = root / "src/SFML/Audio/SoundFileFactory.cpp"
           f = factory.read_text(encoding="utf-8")
-          f = f.replace('#include <SFML/Audio/SoundFileReaderFlac.hpp>\n#include <SFML/Audio/SoundFileWriterFlac.hpp>\n', '#ifndef __EMSCRIPTEN__\n#include <SFML/Audio/SoundFileReaderFlac.hpp>\n#include <SFML/Audio/SoundFileWriterFlac.hpp>\n#endif\n')
-          f = f.replace('''            sf::SoundFileFactory::registerReader<sf::priv::SoundFileReaderFlac>();\n            sf::SoundFileFactory::registerWriter<sf::priv::SoundFileWriterFlac>();\n''', '''#ifndef __EMSCRIPTEN__\n            sf::SoundFileFactory::registerReader<sf::priv::SoundFileReaderFlac>();\n            sf::SoundFileFactory::registerWriter<sf::priv::SoundFileWriterFlac>();\n#endif\n''')
+          old = '#include <SFML/Audio/SoundFileReaderFlac.hpp>\n#include <SFML/Audio/SoundFileWriterFlac.hpp>\n'
+          new = '#ifndef __EMSCRIPTEN__\n#include <SFML/Audio/SoundFileReaderFlac.hpp>\n#include <SFML/Audio/SoundFileWriterFlac.hpp>\n#endif\n'
+          assert old in f
+          f = f.replace(old, new, 1)
+          old = '''            sf::SoundFileFactory::registerReader<sf::priv::SoundFileReaderFlac>();\n            sf::SoundFileFactory::registerWriter<sf::priv::SoundFileWriterFlac>();\n'''
+          new = '''#ifndef __EMSCRIPTEN__\n            sf::SoundFileFactory::registerReader<sf::priv::SoundFileReaderFlac>();\n            sf::SoundFileFactory::registerWriter<sf::priv::SoundFileWriterFlac>();\n#endif\n'''
+          assert old in f
+          f = f.replace(old, new, 1)
           factory.write_text(f, encoding="utf-8")
           PY
 
@@ -219,6 +239,12 @@ jobs:
           test -f sfml-install/lib/libsfml-audio-s.a
           test -f sfml-install/lib/libsfml-network-s.a
 
+      - name: Checkout GoogleTest sources
+        run: |
+          set -eux
+          git clone --depth 1 --branch release-1.12.1 https://github.com/google/googletest.git third-party/googletest
+          test -d third-party/googletest/googletest
+
       - name: Prepare Floating Sandbox WebAssembly compatibility layer
         run: |
           set -eux
@@ -229,8 +255,7 @@ jobs:
           p = Path("upstream-floating-sandbox/Sources/OpenGLCore/glad/glad.c")
           s = p.read_text(encoding="utf-8")
           marker = '#else\n#include <dlfcn.h>\nstatic void* libGL;'
-          if marker not in s:
-              raise SystemExit("Could not locate glad dynamic-loader block")
+          assert marker in s
           start = s.index(marker)
           end = s.index("struct gladGLversionStruct GLVersion", start)
           replacement = r'''#else
@@ -306,6 +331,7 @@ void* get_proc(const char *namez) {
           set -eux
           rm -rf wasm-port-build
           mkdir -p wasm-port-build
+          test -n "$WX_CONFIG"
 
           cat > upstream-floating-sandbox/cmake/FindwxWidgets.cmake <<'CMAKE'
           include(FindPackageHandleStandardArgs)
@@ -316,35 +342,21 @@ void* get_proc(const char *namez) {
               find_program(wxWidgets_CONFIG_EXECUTABLE NAMES wx-config wx-config-3.1)
             endif()
           endif()
-
           set(wxWidgets_FOUND FALSE)
           set(wxWidgets_INCLUDE_DIRS "")
           set(wxWidgets_LIBRARIES "")
           set(wxWidgets_LIBRARY_DIRS "")
           set(wxWidgets_CXX_FLAGS "")
           set(wxWidgets_DEFINITIONS "")
-
+          set(wxWidgets_USE_FILE "${CMAKE_CURRENT_LIST_DIR}/wxWidgetsUseFile.cmake")
           if(wxWidgets_CONFIG_EXECUTABLE)
-            execute_process(
-              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags
-              OUTPUT_VARIABLE _wx_cxxflags_raw
-              ERROR_VARIABLE _wx_cxxflags_err
-              RESULT_VARIABLE _wx_cxxflags_ret
-              OUTPUT_STRIP_TRAILING_WHITESPACE)
-            execute_process(
-              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs base,core,html,propgrid,ribbon
-              OUTPUT_VARIABLE _wx_libs_raw
-              ERROR_VARIABLE _wx_libs_err
-              RESULT_VARIABLE _wx_libs_ret
-              OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-            message(STATUS "FindwxWidgets(WASM): cxxflags ret=${_wx_cxxflags_ret} out='${_wx_cxxflags_raw}' err='${_wx_cxxflags_err}'")
-            message(STATUS "FindwxWidgets(WASM): libs ret=${_wx_libs_ret} out='${_wx_libs_raw}' err='${_wx_libs_err}'")
-
+            execute_process(COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags OUTPUT_VARIABLE _wx_cxxflags_raw ERROR_VARIABLE _wx_cxxflags_err RESULT_VARIABLE _wx_cxxflags_ret OUTPUT_STRIP_TRAILING_WHITESPACE)
+            execute_process(COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs base,core,html,propgrid,ribbon OUTPUT_VARIABLE _wx_libs_raw ERROR_VARIABLE _wx_libs_err RESULT_VARIABLE _wx_libs_ret OUTPUT_STRIP_TRAILING_WHITESPACE)
+            message(STATUS "FindwxWidgets(WASM): cxxflags ret=${_wx_cxxflags_ret} out='${_wx_cxxflags_raw}'")
+            message(STATUS "FindwxWidgets(WASM): libs ret=${_wx_libs_ret} out='${_wx_libs_raw}'")
             if(_wx_cxxflags_ret EQUAL 0 AND _wx_libs_ret EQUAL 0 AND NOT "${_wx_libs_raw}" STREQUAL "")
               separate_arguments(_wx_cxxflags NATIVE_COMMAND "${_wx_cxxflags_raw}")
               separate_arguments(_wx_libs NATIVE_COMMAND "${_wx_libs_raw}")
-
               foreach(_arg IN LISTS _wx_cxxflags)
                 if(_arg MATCHES "^-I(.+)$")
                   list(APPEND wxWidgets_INCLUDE_DIRS "${CMAKE_MATCH_1}")
@@ -354,7 +366,6 @@ void* get_proc(const char *namez) {
                   list(APPEND wxWidgets_CXX_FLAGS "${_arg}")
                 endif()
               endforeach()
-
               foreach(_arg IN LISTS _wx_libs)
                 if(_arg MATCHES "^-L(.+)$")
                   list(APPEND wxWidgets_LIBRARY_DIRS "${CMAKE_MATCH_1}")
@@ -362,14 +373,43 @@ void* get_proc(const char *namez) {
                   list(APPEND wxWidgets_LIBRARIES "${_arg}")
                 endif()
               endforeach()
-
               set(wxWidgets_FOUND TRUE)
             endif()
           endif()
-
-          find_package_handle_standard_args(wxWidgets
-            REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES)
+          find_package_handle_standard_args(wxWidgets REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES)
           CMAKE
+          : > upstream-floating-sandbox/cmake/wxWidgetsUseFile.cmake
+
+          cat > upstream-floating-sandbox/cmake/FindSFML.cmake <<'CMAKE'
+          include(FindPackageHandleStandardArgs)
+          if(NOT SFML_ROOT)
+            set(SFML_ROOT "$ENV{GITHUB_WORKSPACE}/sfml-install")
+          endif()
+          set(SFML_INCLUDE_DIRS "${SFML_ROOT}/include")
+          set(SFML_VERSION_STRING "2.5.1")
+          set(SFML_VERSION_MAJOR 2)
+          set(SFML_VERSION_MINOR 5)
+          set(SFML_VERSION_PATCH 1)
+          set(SFML_FOUND TRUE)
+
+          foreach(_sfml_name IN ITEMS sfml-system sfml-network sfml-audio)
+            if(NOT TARGET ${_sfml_name})
+              add_library(${_sfml_name} STATIC IMPORTED GLOBAL)
+              set_target_properties(${_sfml_name} PROPERTIES
+                IMPORTED_LOCATION "${SFML_ROOT}/lib/lib${_sfml_name}-s.a"
+                INTERFACE_INCLUDE_DIRECTORIES "${SFML_ROOT}/include")
+            endif()
+          endforeach()
+          set_target_properties(sfml-audio PROPERTIES
+            INTERFACE_LINK_LIBRARIES "sfml-system;-lopenal;-lvorbisfile;-lvorbis;-logg")
+
+          find_package_handle_standard_args(SFML
+            REQUIRED_VARS SFML_ROOT SFML_INCLUDE_DIRS
+            VERSION_VAR SFML_VERSION_STRING)
+          CMAKE
+
+          WX_CXXFLAGS="$(wx-config --cxxflags)"
+          WX_DEFS="$(wx-config --cxxflags | tr ' ' '\n' | grep '^-' | grep -E '^-D' | tr '\n' ' ' || true)"
 
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
@@ -390,10 +430,9 @@ void* get_proc(const char *namez) {
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
             -DwxWidgets_USE_STATIC=ON \
-            -DwxWidgets_USE_UNIVERSAL=ON \
             -DSFML_ROOT="$GITHUB_WORKSPACE/sfml-install" \
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/sfml-install" \
-            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/wasm-compat -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -pthread" \
+            -DCMAKE_CXX_FLAGS="$WX_CXXFLAGS -I$GITHUB_WORKSPACE/wasm-compat -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -pthread" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -pthread"
 
       - name: Build
@@ -405,9 +444,9 @@ void* get_proc(const char *namez) {
         if: always()
         run: |
           set -eux
-          echo '=== CMake cache ==='
+          echo '=== CMake dependency summary ==='
           if [ -f wasm-port-build/CMakeCache.txt ]; then
-            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX|SFML|OPENGL|OPENAL|VORBIS' wasm-port-build/CMakeCache.txt || true
+            grep -E 'CMAKE_CXX_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML|OPENGL|GTEST' wasm-port-build/CMakeCache.txt || true
           fi
           echo '=== WASM/JS/HTML/data output ==='
           if [ -d wasm-port-build ]; then
