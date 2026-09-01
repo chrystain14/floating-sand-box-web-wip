@@ -1,4 +1,4 @@
-name: Floating Sandbox WASM Staging Smoke Test
+name: Floating Sandbox WebAssembly Port
 
 on:
   workflow_dispatch:
@@ -9,16 +9,228 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: floating-sandbox-wasm-port-next
+  cancel-in-progress: true
+
 jobs:
-  smoke:
+  emscripten-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout project
         uses: actions/checkout@v4
-      - name: Validate workflow runner
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: 3.1.12
+
+      - name: Verify Emscripten
         run: |
           set -eux
-          echo "Workflow YAML parsed successfully."
-          echo "Branch: $GITHUB_REF_NAME"
-          echo "Commit: $GITHUB_SHA"
-          test -f .github/workflows/wasm-port.yml
+          emcc --version
+          em++ --version
+          command -v emcmake
+          emcmake cmake --version
+          echo "EM_SYSROOT=$(emcc -print-sysroot)" >> "$GITHUB_ENV"
+
+      - name: Checkout upstream Floating Sandbox
+        run: |
+          set -eux
+          git clone --depth 1 https://github.com/GabrieleGiuseppini/Floating-Sandbox.git upstream-floating-sandbox
+
+      - name: Install PicoJSON
+        run: |
+          set -eux
+          mkdir -p third-party/picojson/include
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h -o third-party/picojson/include/picojson.h
+          test -s third-party/picojson/include/picojson.h
+
+      - name: Build ZLIB for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git zlib-src
+          emcmake cmake -S zlib-src -B zlib-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DZLIB_BUILD_TESTING=OFF
+          cmake --build zlib-build --parallel 2
+          cmake --install zlib-build
+          test -f zlib-install/include/zlib.h
+          test -f zlib-install/lib/libz.a
+
+      - name: Build JPEG for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch 3.1.1 https://github.com/libjpeg-turbo/libjpeg-turbo.git jpeg-src
+          emcmake cmake -S jpeg-src -B jpeg-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/jpeg-install" \
+            -DENABLE_SHARED=OFF \
+            -DWITH_TURBOJPEG=OFF \
+            -DWITH_SIMD=OFF
+          cmake --build jpeg-build --parallel 2
+          cmake --install jpeg-build
+          test -f jpeg-install/include/jpeglib.h
+          test -f jpeg-install/lib/libjpeg.a
+
+      - name: Build PNG for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch v1.6.50 https://github.com/pnggroup/libpng.git png-src
+          emcmake cmake -S png-src -B png-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" \
+            -DPNG_SHARED=OFF \
+            -DPNG_TESTS=OFF \
+            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
+            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
+            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a"
+          cmake --build png-build --parallel 2
+          cmake --install png-build
+          test -f png-install/include/png.h
+          test -f png-install/lib/libpng16.a
+
+      - name: Build wxWidgets for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 https://github.com/ahilss/wxWidgets-wasm.git wxwidgets-src
+          cd wxwidgets-src
+          git submodule update --init src/jpeg src/zlib src/png src/expat 3rdparty/catch
+          cp config.sub src/expat/expat/conftools/config.sub
+          cp config.guess src/expat/expat/conftools/config.guess
+          chmod +x src/expat/expat/conftools/config.sub src/expat/expat/conftools/config.guess
+          export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
+          export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
+          emconfigure ./configure \
+            --host=emscripten \
+            --prefix="$GITHUB_WORKSPACE/wxwidgets-install" \
+            --with-cxx=14 \
+            --enable-utf8 \
+            --enable-universal \
+            --disable-shared \
+            --disable-exceptions \
+            --disable-richtext \
+            --without-libtiff \
+            --disable-xlocale \
+            --with-zlib=sys \
+            --with-libpng=sys
+          emmake make -j2
+          emmake make install
+          WX_CONFIG=$(find "$GITHUB_WORKSPACE/wxwidgets-install" -type f -name 'wx-config*' -print -quit)
+          test -n "$WX_CONFIG"
+          chmod +x "$WX_CONFIG"
+          echo "WX_CONFIG=$WX_CONFIG" >> "$GITHUB_ENV"
+          echo "$(dirname "$WX_CONFIG")" >> "$GITHUB_PATH"
+
+      - name: Verify wxWidgets
+        run: |
+          set -eux
+          test -n "$WX_CONFIG"
+          wx-config --version
+          wx-config --cxxflags
+          wx-config --libs base,core,html,propgrid,ribbon
+
+      - name: Prepare Emscripten audio ports
+        run: |
+          set -eux
+          cat > /tmp/audio-probe.cpp <<'CPP'
+          #include <AL/al.h>
+          #include <vorbis/vorbisfile.h>
+          int main() { return AL_NO_ERROR; }
+          CPP
+          em++ /tmp/audio-probe.cpp -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -o /tmp/audio-probe.js
+          test -s /tmp/audio-probe.js
+          test -f "$EM_SYSROOT/include/AL/al.h"
+          test -f "$EM_SYSROOT/include/vorbis/vorbisfile.h"
+
+      - name: Build SFML 2.5.1 for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch 2.5.1 https://github.com/SFML/SFML.git sfml-src
+          export CXXFLAGS="-fexceptions -pthread"
+          export LDFLAGS="-pthread -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
+          python3 -m py_compile wasm-compat/prepare_wasm_build.py
+          python3 wasm-compat/prepare_wasm_build.py
+          emcmake cmake -S sfml-src -B sfml-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/sfml-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DSFML_BUILD_EXAMPLES=OFF \
+            -DSFML_BUILD_DOC=OFF \
+            -DSFML_BUILD_WINDOW=OFF \
+            -DSFML_BUILD_GRAPHICS=OFF \
+            -DSFML_BUILD_AUDIO=ON \
+            -DSFML_BUILD_NETWORK=ON \
+            -DSFML_USE_SYSTEM_DEPS=OFF
+          cmake --build sfml-build --parallel 2
+          cmake --install sfml-build
+          test -f sfml-install/lib/libsfml-system-s.a
+          test -f sfml-install/lib/libsfml-network-s.a
+          test -f sfml-install/lib/libsfml-audio-s.a
+
+      - name: Prepare Floating Sandbox compatibility
+        run: |
+          set -eux
+          test -s wasm-compat/wx/glcanvas.h
+          python3 wasm-compat/prepare_wasm_build.py
+
+      - name: Configure Floating Sandbox
+        run: |
+          set -eux
+          rm -rf wasm-port-build
+          WX_CXXFLAGS="$(wx-config --cxxflags)"
+          export CXXFLAGS="$WX_CXXFLAGS -I$GITHUB_WORKSPACE/wasm-compat -fexceptions -pthread -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -fexceptions -pthread -sDISABLE_EXCEPTION_CATCHING=0 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
+          emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFS_BUILD_BENCHMARKS=OFF \
+            -DFS_USE_STATIC_LIBS=ON \
+            -DGTEST_DIR="$GITHUB_WORKSPACE/third-party/googletest" \
+            -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" \
+            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
+            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
+            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" \
+            -DJPEG_INCLUDE_DIR="$GITHUB_WORKSPACE/jpeg-install/include" \
+            -DJPEG_LIBRARY="$GITHUB_WORKSPACE/jpeg-install/lib/libjpeg.a" \
+            -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
+            -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
+            -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" \
+            -DwxWidgets_ROOT="$GITHUB_WORKSPACE/wxwidgets-install" \
+            -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
+            -DwxWidgets_USE_DEBUG=OFF \
+            -DwxWidgets_USE_UNICODE=ON \
+            -DwxWidgets_USE_STATIC=ON \
+            -DSFML_ROOT="$GITHUB_WORKSPACE/sfml-install"
+
+      - name: Build Floating Sandbox
+        run: |
+          set -eux
+          cmake --build wasm-port-build --parallel 2
+
+      - name: Collect build output
+        if: always()
+        run: |
+          set -eux
+          echo '=== CMake dependency summary ==='
+          if [ -f wasm-port-build/CMakeCache.txt ]; then
+            grep -E 'PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML|OPENGL|GTEST|CMAKE_CXX_COMPILER' wasm-port-build/CMakeCache.txt || true
+          fi
+          echo '=== WebAssembly output ==='
+          find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
+
+      - name: Upload experimental build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: floating-sandbox-emscripten-port
+          path: |
+            wasm-port-build/**/*.wasm
+            wasm-port-build/**/*.js
+            wasm-port-build/**/*.html
+            wasm-port-build/**/*.data
+            wasm-port-build/CMakeCache.txt
+            wasm-port-build/CMakeFiles/**/*.log
+          if-no-files-found: ignore
