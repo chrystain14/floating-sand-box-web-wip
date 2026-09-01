@@ -161,10 +161,9 @@ jobs:
           wx-config --version
           wx-config --libs
 
-          # Floating Sandbox ships an older copy of FindwxWidgets.cmake that
-          # tries to re-discover every -l... item and does not understand some
-          # wxWidgets-WASM library names. Replace it with a small wx-config
-          # based finder that preserves the actual flags from the working build.
+          # This workflow deliberately uses a wx-config based finder because
+          # the upstream copy of FindwxWidgets.cmake incorrectly re-roots WASM
+          # library checks into the Emscripten sysroot.
           cat > upstream-floating-sandbox/cmake/FindwxWidgets.cmake <<'CMAKE'
           include(FindPackageHandleStandardArgs)
 
@@ -231,6 +230,10 @@ jobs:
           )
           CMAKE
 
+          # wxGLCanvas is not implemented by the WASM wxWidgets port, so remove
+          # that component from Floating Sandbox's dependency request.
+          sed -i 's/find_package(wxWidgets REQUIRED base core gl html propgrid ribbon)/find_package(wxWidgets REQUIRED base core html propgrid ribbon)/' upstream-floating-sandbox/CMakeLists.txt
+
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DFS_BUILD_BENCHMARKS=OFF \
@@ -261,7 +264,7 @@ jobs:
           set -eux
           echo '=== CMake cache ==='
           if [ -f wasm-port-build/CMakeCache.txt ]; then
-            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX' wasm-port-build/CMakeCache.txt || true
+            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX|SFML' wasm-port-build/CMakeCache.txt || true
           fi
           echo '=== WASM/JS output ==='
           if [ -d wasm-port-build ]; then
