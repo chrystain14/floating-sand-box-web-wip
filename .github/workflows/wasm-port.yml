@@ -3,13 +3,13 @@ name: Experimental Floating Sandbox WebAssembly Port
 on:
   workflow_dispatch:
   push:
-    branches: [wasm-port]
+    branches: [wasm-port-next]
 
 permissions:
   contents: read
 
 concurrency:
-  group: floating-sandbox-wasm-port
+  group: floating-sandbox-wasm-port-next
   cancel-in-progress: true
 
 jobs:
@@ -32,6 +32,7 @@ jobs:
           command -v emcmake
           emcmake cmake --version
           cmake --version
+          echo "EM_SYSROOT=$(emcc -print-sysroot)" >> "$GITHUB_ENV"
 
       - name: Checkout upstream Floating Sandbox
         run: |
@@ -49,7 +50,6 @@ jobs:
         run: |
           set -eux
           git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git zlib-src
-          mkdir -p zlib-build zlib-install
           emcmake cmake -S zlib-src -B zlib-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" \
@@ -64,7 +64,6 @@ jobs:
         run: |
           set -eux
           git clone --depth 1 --branch 3.1.1 https://github.com/libjpeg-turbo/libjpeg-turbo.git jpeg-src
-          mkdir -p jpeg-build jpeg-install
           emcmake cmake -S jpeg-src -B jpeg-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/jpeg-install" \
@@ -80,7 +79,6 @@ jobs:
         run: |
           set -eux
           git clone --depth 1 --branch v1.6.50 https://github.com/pnggroup/libpng.git png-src
-          mkdir -p png-build png-install
           emcmake cmake -S png-src -B png-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" \
@@ -103,16 +101,14 @@ jobs:
           test -f src/zlib/zlib.h
           test -f src/png/png.c
           test -f src/expat/expat/lib/expat.h
-          test -f config.sub
-          test -f config.guess
-          test -f src/expat/expat/conftools/config.sub
-          test -f src/expat/expat/conftools/config.guess
           cp config.sub src/expat/expat/conftools/config.sub
           cp config.guess src/expat/expat/conftools/config.guess
           chmod +x src/expat/expat/conftools/config.sub src/expat/expat/conftools/config.guess
+
           export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
           export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
+
           emconfigure ./configure \
             --host=emscripten \
             --prefix="$GITHUB_WORKSPACE/wxwidgets-install" \
@@ -126,8 +122,10 @@ jobs:
             --disable-xlocale \
             --with-zlib=sys \
             --with-libpng=sys
+
           emmake make -j2
           emmake make install
+
           WX_CONFIG=$(find "$GITHUB_WORKSPACE/wxwidgets-install" -type f -name 'wx-config*' -print -quit)
           test -n "$WX_CONFIG"
           chmod +x "$WX_CONFIG"
@@ -138,33 +136,69 @@ jobs:
         run: |
           set -eux
           test -n "$WX_CONFIG"
-          test -f "$WX_CONFIG"
           wx-config --version
           wx-config --cxxflags
           wx-config --libs
-          for combo in "base" "base,core" "base,core,html" "base,core,propgrid" "base,core,ribbon" "base,core,gl" "base,core,html,propgrid,ribbon"; do
-            echo "--- wx-config --libs $combo ---"
-            wx-config --libs "$combo" || true
-          done
+          wx-config --libs base,core,html,propgrid,ribbon
+          if wx-config --libs base,core,gl >/tmp/wx-gl.txt 2>&1; then
+            echo "Unexpected wx-config GL support:"; cat /tmp/wx-gl.txt
+          else
+            echo "wx-config correctly rejects the unavailable GL component"
+          fi
+
+      - name: Prepare Emscripten audio ports
+        run: |
+          set -eux
+          cat > /tmp/wasm-audio-probe.cpp <<'CPP'
+          #include <AL/al.h>
+          #include <vorbis/vorbisfile.h>
+          int main() { return AL_NO_ERROR + ov_clear(nullptr); }
+          CPP
+          em++ /tmp/wasm-audio-probe.cpp \
+            -sUSE_OPENAL=1 \
+            -sUSE_OGG=1 \
+            -sUSE_VORBIS=1 \
+            -o /tmp/wasm-audio-probe.js
+          test -s /tmp/wasm-audio-probe.js
+          find "$EM_SYSROOT/include" -maxdepth 3 -type f \( -path '*/AL/al.h' -o -path '*/vorbis/vorbisfile.h' \) -print
 
       - name: Build SFML 2.5.1 for WebAssembly
         run: |
           set -eux
           git clone --depth 1 --branch 2.5.1 https://github.com/SFML/SFML.git sfml-src
+
           python3 - <<'PY'
-          p = "sfml-src/cmake/Config.cmake"
-          s = open(p, encoding="utf-8").read()
+          from pathlib import Path
+
+          cfg = Path("sfml-src/cmake/Config.cmake")
+          s = cfg.read_text(encoding="utf-8")
           marker = 'elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")'
-          insert = '''elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
-              set(SFML_OS_UNIX 1)
-              set(SFML_OS_LINUX 1)
-              set(OPENGL_ES 1)
-          '''
+          insert = '''elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")\n    set(SFML_OS_UNIX 1)\n    set(SFML_OS_EMSCRIPTEN 1)\n    set(OPENGL_ES 1)\n'''
           assert marker in s
-          s = s.replace(marker, insert + marker, 1)
-          open(p, "w", encoding="utf-8").write(s)
+          cfg.write_text(s.replace(marker, insert + marker, 1), encoding="utf-8")
+
+          sysroot = Path("${EM_SYSROOT}")
+          mods = Path("sfml-src/cmake/Modules")
+          mods.mkdir(parents=True, exist_ok=True)
+
+          (mods / "FindOpenAL.cmake").write_text(f'''set(OPENAL_FOUND TRUE)\nset(OpenAL_FOUND TRUE)\nset(OPENAL_INCLUDE_DIR "{sysroot / 'include'}")\nset(OPENAL_LIBRARY "-lopenal")\n''', encoding="utf-8")
+          (mods / "FindVorbis.cmake").write_text(f'''set(VORBIS_FOUND TRUE)\nset(Vorbis_FOUND TRUE)\nset(VORBIS_INCLUDE_DIRS "{sysroot / 'include'}")\nset(VORBIS_LIBRARIES "-lvorbisfile;-lvorbis;-logg")\n''', encoding="utf-8")
+
+          audio = Path("sfml-src/src/SFML/Audio/CMakeLists.txt")
+          a = audio.read_text(encoding="utf-8")
+          a = a.replace('''set(CODECS_SRC\n    ${SRCROOT}/SoundFileFactory.cpp\n    ${INCROOT}/SoundFileFactory.hpp\n    ${INCROOT}/SoundFileFactory.inl\n    ${INCROOT}/SoundFileReader.hpp\n    ${SRCROOT}/SoundFileReaderFlac.hpp\n    ${SRCROOT}/SoundFileReaderFlac.cpp\n    ${SRCROOT}/SoundFileReaderOgg.hpp\n    ${SRCROOT}/SoundFileReaderOgg.cpp\n    ${SRCROOT}/SoundFileReaderWav.hpp\n    ${SRCROOT}/SoundFileReaderWav.cpp\n    ${INCROOT}/SoundFileWriter.hpp\n    ${SRCROOT}/SoundFileWriterFlac.hpp\n    ${SRCROOT}/SoundFileWriterFlac.cpp\n    ${SRCROOT}/SoundFileWriterOgg.hpp\n    ${SRCROOT}/SoundFileWriterOgg.cpp\n    ${SRCROOT}/SoundFileWriterWav.hpp\n    ${SRCROOT}/SoundFileWriterWav.cpp\n)''', '''if(SFML_OS_EMSCRIPTEN)\n    set(CODECS_SRC\n        ${SRCROOT}/SoundFileFactory.cpp\n        ${INCROOT}/SoundFileFactory.hpp\n        ${INCROOT}/SoundFileFactory.inl\n        ${INCROOT}/SoundFileReader.hpp\n        ${SRCROOT}/SoundFileReaderOgg.hpp\n        ${SRCROOT}/SoundFileReaderOgg.cpp\n        ${SRCROOT}/SoundFileReaderWav.hpp\n        ${SRCROOT}/SoundFileReaderWav.cpp\n        ${INCROOT}/SoundFileWriter.hpp\n        ${SRCROOT}/SoundFileWriterOgg.hpp\n        ${SRCROOT}/SoundFileWriterOgg.cpp\n        ${SRCROOT}/SoundFileWriterWav.hpp\n        ${SRCROOT}/SoundFileWriterWav.cpp\n    )\nelse()\n    set(CODECS_SRC\n        ${SRCROOT}/SoundFileFactory.cpp\n        ${INCROOT}/SoundFileFactory.hpp\n        ${INCROOT}/SoundFileFactory.inl\n        ${INCROOT}/SoundFileReader.hpp\n        ${SRCROOT}/SoundFileReaderFlac.hpp\n        ${SRCROOT}/SoundFileReaderFlac.cpp\n        ${SRCROOT}/SoundFileReaderOgg.hpp\n        ${SRCROOT}/SoundFileReaderOgg.cpp\n        ${SRCROOT}/SoundFileReaderWav.hpp\n        ${SRCROOT}/SoundFileReaderWav.cpp\n        ${INCROOT}/SoundFileWriter.hpp\n        ${SRCROOT}/SoundFileWriterFlac.hpp\n        ${SRCROOT}/SoundFileWriterFlac.cpp\n        ${SRCROOT}/SoundFileWriterOgg.hpp\n        ${SRCROOT}/SoundFileWriterOgg.cpp\n        ${SRCROOT}/SoundFileWriterWav.hpp\n        ${SRCROOT}/SoundFileWriterWav.cpp\n    )\nendif()''')
+          a = a.replace('''sfml_find_package(OpenAL INCLUDE "OPENAL_INCLUDE_DIR" LINK "OPENAL_LIBRARY")\nsfml_find_package(Vorbis INCLUDE "VORBIS_INCLUDE_DIRS" LINK "VORBIS_LIBRARIES")\nsfml_find_package(FLAC INCLUDE "FLAC_INCLUDE_DIR" LINK "FLAC_LIBRARY")''', '''sfml_find_package(OpenAL INCLUDE "OPENAL_INCLUDE_DIR" LINK "OPENAL_LIBRARY")\nsfml_find_package(Vorbis INCLUDE "VORBIS_INCLUDE_DIRS" LINK "VORBIS_LIBRARIES")\nif(NOT SFML_OS_EMSCRIPTEN)\n    sfml_find_package(FLAC INCLUDE "FLAC_INCLUDE_DIR" LINK "FLAC_LIBRARY")\nendif()''')
+          a = a.replace('''target_compile_definitions(Vorbis INTERFACE "OV_EXCLUDE_STATIC_CALLBACKS")\ntarget_compile_definitions(FLAC INTERFACE "FLAC__NO_DLL")''', '''target_compile_definitions(Vorbis INTERFACE "OV_EXCLUDE_STATIC_CALLBACKS")\nif(NOT SFML_OS_EMSCRIPTEN)\n    target_compile_definitions(FLAC INTERFACE "FLAC__NO_DLL")\nendif()''')
+          a = a.replace('''target_link_libraries(sfml-audio\n                      PUBLIC sfml-system\n                      PRIVATE Vorbis FLAC)''', '''if(SFML_OS_EMSCRIPTEN)\n    target_link_libraries(sfml-audio PUBLIC sfml-system PRIVATE Vorbis)\nelse()\n    target_link_libraries(sfml-audio PUBLIC sfml-system PRIVATE Vorbis FLAC)\nendif()''')
+          audio.write_text(a, encoding="utf-8")
+
+          factory = Path("sfml-src/src/SFML/Audio/SoundFileFactory.cpp")
+          f = factory.read_text(encoding="utf-8")
+          f = f.replace('#include <SFML/Audio/SoundFileReaderFlac.hpp>\n#include <SFML/Audio/SoundFileWriterFlac.hpp>\n', '#ifndef __EMSCRIPTEN__\n#include <SFML/Audio/SoundFileReaderFlac.hpp>\n#include <SFML/Audio/SoundFileWriterFlac.hpp>\n#endif\n')
+          f = f.replace('''            sf::SoundFileFactory::registerReader<sf::priv::SoundFileReaderFlac>();\n            sf::SoundFileFactory::registerWriter<sf::priv::SoundFileWriterFlac>();\n''', '''#ifndef __EMSCRIPTEN__\n            sf::SoundFileFactory::registerReader<sf::priv::SoundFileReaderFlac>();\n            sf::SoundFileFactory::registerWriter<sf::priv::SoundFileWriterFlac>();\n#endif\n''')
+          factory.write_text(f, encoding="utf-8")
           PY
-          mkdir -p sfml-build sfml-install
+
           emcmake cmake -S sfml-src -B sfml-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/sfml-install" \
@@ -173,37 +207,38 @@ jobs:
             -DSFML_BUILD_DOC=OFF \
             -DSFML_BUILD_WINDOW=OFF \
             -DSFML_BUILD_GRAPHICS=OFF \
-            -DSFML_BUILD_NETWORK=OFF \
+            -DSFML_BUILD_NETWORK=ON \
             -DSFML_BUILD_AUDIO=ON \
             -DSFML_USE_SYSTEM_DEPS=OFF
+
           cmake --build sfml-build --parallel 2
           cmake --install sfml-build
+
           test -f sfml-install/include/SFML/Audio.hpp
           test -f sfml-install/lib/libsfml-system-s.a
           test -f sfml-install/lib/libsfml-audio-s.a
-
-      - name: Checkout GoogleTest sources
-        run: |
-          set -eux
-          git clone --depth 1 --branch release-1.12.1 https://github.com/google/googletest.git third-party/googletest
-          test -d third-party/googletest/googletest
+          test -f sfml-install/lib/libsfml-network-s.a
 
       - name: Prepare Floating Sandbox WebAssembly compatibility layer
         run: |
           set -eux
-          test -f wasm-compat/wx/glcanvas.h
           test -s wasm-compat/wx/glcanvas.h
+
           python3 - <<'PY'
-          p = "upstream-floating-sandbox/Sources/OpenGLCore/glad/glad.c"
-          s = open(p, encoding="utf-8").read()
-          start = s.index("#else\n#include <dlfcn.h>\nstatic void* libGL;")
+          from pathlib import Path
+          p = Path("upstream-floating-sandbox/Sources/OpenGLCore/glad/glad.c")
+          s = p.read_text(encoding="utf-8")
+          marker = '#else\n#include <dlfcn.h>\nstatic void* libGL;'
+          if marker not in s:
+              raise SystemExit("Could not locate glad dynamic-loader block")
+          start = s.index(marker)
           end = s.index("struct gladGLversionStruct GLVersion", start)
           replacement = r'''#else
 #ifdef __EMSCRIPTEN__
 #include <emscripten/html5_webgl.h>
 static void* libGL;
 int open_gl(void) { return 1; }
-void close_gl(void) {}
+void close_gl(void) { libGL = NULL; }
 void* get_proc(const char *namez) { return emscripten_webgl_get_proc_address(namez); }
 #else
 #include <dlfcn.h>
@@ -261,27 +296,16 @@ void* get_proc(const char *namez) {
 #endif
 
 '''
-          s = s[:start] + replacement + s[end:]
-          open(p, "w", encoding="utf-8").write(s)
-          PY
+          p.write_text(s[:start] + replacement + s[end:], encoding="utf-8")
 
-          cat > upstream-floating-sandbox/cmake/FindOpenGL.cmake <<'CMAKE'
-          include_guard()
-          set(OpenGL_FOUND TRUE)
-          set(OPENGL_FOUND TRUE)
-          set(OPENGL_LIBRARIES "")
-          set(OPENGL_INCLUDE_DIRS "")
-          if(NOT TARGET OpenGL::GL)
-            add_library(OpenGL::GL INTERFACE IMPORTED)
-          endif()
-          CMAKE
+          Path("upstream-floating-sandbox/cmake/FindOpenGL.cmake").write_text('''include_guard()\nset(OpenGL_FOUND TRUE)\nset(OPENGL_FOUND TRUE)\nset(OPENGL_LIBRARIES "")\nset(OPENGL_INCLUDE_DIRS "")\nif(NOT TARGET OpenGL::GL)\n  add_library(OpenGL::GL INTERFACE IMPORTED)\nendif()\n''', encoding="utf-8")
+          PY
 
       - name: Configure Emscripten build
         run: |
           set -eux
           rm -rf wasm-port-build
           mkdir -p wasm-port-build
-          test -n "$WX_CONFIG"
 
           cat > upstream-floating-sandbox/cmake/FindwxWidgets.cmake <<'CMAKE'
           include(FindPackageHandleStandardArgs)
@@ -292,18 +316,35 @@ void* get_proc(const char *namez) {
               find_program(wxWidgets_CONFIG_EXECUTABLE NAMES wx-config wx-config-3.1)
             endif()
           endif()
+
           set(wxWidgets_FOUND FALSE)
           set(wxWidgets_INCLUDE_DIRS "")
           set(wxWidgets_LIBRARIES "")
           set(wxWidgets_LIBRARY_DIRS "")
           set(wxWidgets_CXX_FLAGS "")
           set(wxWidgets_DEFINITIONS "")
+
           if(wxWidgets_CONFIG_EXECUTABLE)
-            execute_process(COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags OUTPUT_VARIABLE _wx_cxxflags_raw RESULT_VARIABLE _wx_cxxflags_ret OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-            execute_process(COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs OUTPUT_VARIABLE _wx_libs_raw RESULT_VARIABLE _wx_libs_ret OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-            if(_wx_cxxflags_ret EQUAL 0 AND _wx_libs_ret EQUAL 0)
+            execute_process(
+              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags
+              OUTPUT_VARIABLE _wx_cxxflags_raw
+              ERROR_VARIABLE _wx_cxxflags_err
+              RESULT_VARIABLE _wx_cxxflags_ret
+              OUTPUT_STRIP_TRAILING_WHITESPACE)
+            execute_process(
+              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs base,core,html,propgrid,ribbon
+              OUTPUT_VARIABLE _wx_libs_raw
+              ERROR_VARIABLE _wx_libs_err
+              RESULT_VARIABLE _wx_libs_ret
+              OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+            message(STATUS "FindwxWidgets(WASM): cxxflags ret=${_wx_cxxflags_ret} out='${_wx_cxxflags_raw}' err='${_wx_cxxflags_err}'")
+            message(STATUS "FindwxWidgets(WASM): libs ret=${_wx_libs_ret} out='${_wx_libs_raw}' err='${_wx_libs_err}'")
+
+            if(_wx_cxxflags_ret EQUAL 0 AND _wx_libs_ret EQUAL 0 AND NOT "${_wx_libs_raw}" STREQUAL "")
               separate_arguments(_wx_cxxflags NATIVE_COMMAND "${_wx_cxxflags_raw}")
               separate_arguments(_wx_libs NATIVE_COMMAND "${_wx_libs_raw}")
+
               foreach(_arg IN LISTS _wx_cxxflags)
                 if(_arg MATCHES "^-I(.+)$")
                   list(APPEND wxWidgets_INCLUDE_DIRS "${CMAKE_MATCH_1}")
@@ -313,6 +354,7 @@ void* get_proc(const char *namez) {
                   list(APPEND wxWidgets_CXX_FLAGS "${_arg}")
                 endif()
               endforeach()
+
               foreach(_arg IN LISTS _wx_libs)
                 if(_arg MATCHES "^-L(.+)$")
                   list(APPEND wxWidgets_LIBRARY_DIRS "${CMAKE_MATCH_1}")
@@ -320,10 +362,13 @@ void* get_proc(const char *namez) {
                   list(APPEND wxWidgets_LIBRARIES "${_arg}")
                 endif()
               endforeach()
+
               set(wxWidgets_FOUND TRUE)
             endif()
           endif()
-          find_package_handle_standard_args(wxWidgets REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES)
+
+          find_package_handle_standard_args(wxWidgets
+            REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES)
           CMAKE
 
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
@@ -345,10 +390,11 @@ void* get_proc(const char *namez) {
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
             -DwxWidgets_USE_STATIC=ON \
+            -DwxWidgets_USE_UNIVERSAL=ON \
             -DSFML_ROOT="$GITHUB_WORKSPACE/sfml-install" \
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/sfml-install" \
-            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/wasm-compat -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sOFFSCREENCANVAS_SUPPORT=1 -sALLOW_MEMORY_GROWTH=1 -pthread" \
-            -DCMAKE_EXE_LINKER_FLAGS="-sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sOFFSCREENCANVAS_SUPPORT=1 -sALLOW_MEMORY_GROWTH=1 -pthread"
+            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/wasm-compat -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -pthread" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OPENAL=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -pthread"
 
       - name: Build
         run: |
@@ -361,23 +407,23 @@ void* get_proc(const char *namez) {
           set -eux
           echo '=== CMake cache ==='
           if [ -f wasm-port-build/CMakeCache.txt ]; then
-            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX|SFML|OpenGL' wasm-port-build/CMakeCache.txt || true
+            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX|SFML|OPENGL|OPENAL|VORBIS' wasm-port-build/CMakeCache.txt || true
           fi
-          echo '=== WASM/JS output ==='
+          echo '=== WASM/JS/HTML/data output ==='
           if [ -d wasm-port-build ]; then
             find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
           fi
 
-      - name: Upload experimental build logs
+      - name: Upload experimental build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: floating-sandbox-emscripten-port-diagnostics
+          name: floating-sandbox-emscripten-port
           path: |
-            wasm-port-build/CMakeCache.txt
-            wasm-port-build/CMakeFiles/**/*.log
             wasm-port-build/**/*.wasm
             wasm-port-build/**/*.js
             wasm-port-build/**/*.html
             wasm-port-build/**/*.data
+            wasm-port-build/CMakeCache.txt
+            wasm-port-build/CMakeFiles/**/*.log
           if-no-files-found: ignore
