@@ -135,11 +135,13 @@ public:
         return emscripten_webgl_make_context_current(mContext) == EMSCRIPTEN_RESULT_SUCCESS;
     }
 
-    void SwapBuffers()
+    bool SwapBuffers()
     {
         SyncCanvas();
-        if (mContext > 0)
-            emscripten_webgl_make_context_current(mContext);
+        if (mContext <= 0)
+            return false;
+
+        return emscripten_webgl_make_context_current(mContext) == EMSCRIPTEN_RESULT_SUCCESS;
     }
 
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE GetWasmContext() const
