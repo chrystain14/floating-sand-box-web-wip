@@ -33,8 +33,7 @@ jobs:
         run: |
           set -eux
           mkdir -p third-party/picojson/include
-          curl -L --fail --retry 3 https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h \
-            -o third-party/picojson/include/picojson.h
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/kazuho/picojson/master/picojson.h -o third-party/picojson/include/picojson.h
           test -s third-party/picojson/include/picojson.h
 
       - name: Build ZLIB for WebAssembly
@@ -42,11 +41,7 @@ jobs:
           set -eux
           git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git zlib-src
           mkdir -p zlib-build zlib-install
-          emcmake cmake -S zlib-src -B zlib-build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DZLIB_BUILD_TESTING=OFF
+          emcmake cmake -S zlib-src -B zlib-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" -DBUILD_SHARED_LIBS=OFF -DZLIB_BUILD_TESTING=OFF
           cmake --build zlib-build --parallel 2
           cmake --install zlib-build
           test -f zlib-install/include/zlib.h
@@ -57,12 +52,7 @@ jobs:
           set -eux
           git clone --depth 1 --branch 3.1.1 https://github.com/libjpeg-turbo/libjpeg-turbo.git jpeg-src
           mkdir -p jpeg-build jpeg-install
-          emcmake cmake -S jpeg-src -B jpeg-build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/jpeg-install" \
-            -DENABLE_SHARED=OFF \
-            -DWITH_TURBOJPEG=OFF \
-            -DWITH_SIMD=OFF
+          emcmake cmake -S jpeg-src -B jpeg-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/jpeg-install" -DENABLE_SHARED=OFF -DWITH_TURBOJPEG=OFF -DWITH_SIMD=OFF
           cmake --build jpeg-build --parallel 2
           cmake --install jpeg-build
           test -f jpeg-install/include/jpeglib.h
@@ -73,14 +63,7 @@ jobs:
           set -eux
           git clone --depth 1 --branch v1.6.50 https://github.com/pnggroup/libpng.git png-src
           mkdir -p png-build png-install
-          emcmake cmake -S png-src -B png-build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" \
-            -DPNG_SHARED=OFF \
-            -DPNG_TESTS=OFF \
-            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
-            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
-            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a"
+          emcmake cmake -S png-src -B png-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" -DPNG_SHARED=OFF -DPNG_TESTS=OFF -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a"
           cmake --build png-build --parallel 2
           cmake --install png-build
           test -f png-install/include/png.h
@@ -91,53 +74,28 @@ jobs:
           set -eux
           git clone --depth 1 https://github.com/ahilss/wxWidgets-wasm.git wxwidgets-src
           cd wxwidgets-src
-          git submodule update --init src/jpeg 3rdparty/catch
-          export CFLAGS="-I$EMSDK/upstream/emscripten/system/include"
-          export CXXFLAGS="-I$EMSDK/upstream/emscripten/system/include"
-          export LDFLAGS="-L$EMSDK/upstream/emscripten/system/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
-          emconfigure ./configure \
-            --host=emscripten \
-            --with-cxx=14 \
-            --enable-utf8 \
-            --enable-universal \
-            --disable-shared \
-            --disable-exceptions \
-            --disable-richtext \
-            --without-libtiff \
-            --disable-xlocale
+          git submodule update --init src/jpeg src/zlib 3rdparty/catch
+          export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$EMSDK/upstream/emscripten/system/include"
+          export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$EMSDK/upstream/emscripten/system/include"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$EMSDK/upstream/emscripten/system/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
+          emconfigure ./configure --host=emscripten --with-cxx=14 --enable-utf8 --enable-universal --disable-shared --disable-exceptions --disable-richtext --without-libtiff --disable-xlocale --with-zlib=sys
           emmake make -j2
           mkdir -p "$GITHUB_WORKSPACE/wxwidgets-install"
           emmake make install PREFIX="$GITHUB_WORKSPACE/wxwidgets-install"
-          test -f "$GITHUB_WORKSPACE/wxwidgets-install/bin/wx-config" || test -f "$GITHUB_WORKSPACE/wxwidgets-install/bin/wx-config-3.1"
+          WX_CONFIG=$(find "$GITHUB_WORKSPACE/wxwidgets-install" -type f -name 'wx-config*' -print -quit)
+          test -n "$WX_CONFIG"
+          chmod +x "$WX_CONFIG"
+          echo "WX_CONFIG=$WX_CONFIG" >> "$GITHUB_ENV"
+          echo "$(dirname "$WX_CONFIG")" >> "$GITHUB_PATH"
 
       - name: Configure Emscripten build
         run: |
           set -eux
+          rm -rf wasm-port-build
           mkdir -p wasm-port-build
-          WX_CONFIG=$(find "$GITHUB_WORKSPACE/wxwidgets-install" -type f -name 'wx-config*' -print -quit)
           test -n "$WX_CONFIG"
-          chmod +x "$WX_CONFIG"
-          export WX_CONFIG
-          export PATH="$(dirname "$WX_CONFIG"):$PATH"
           wx-config --version || true
-          emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DFS_BUILD_BENCHMARKS=OFF \
-            -DFS_USE_STATIC_LIBS=ON \
-            -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" \
-            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
-            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
-            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" \
-            -DJPEG_INCLUDE_DIR="$GITHUB_WORKSPACE/jpeg-install/include" \
-            -DJPEG_LIBRARY="$GITHUB_WORKSPACE/jpeg-install/lib/libjpeg.a" \
-            -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
-            -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
-            -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" \
-            -DwxWidgets_ROOT="$GITHUB_WORKSPACE/wxwidgets-install" \
-            -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
-            -DwxWidgets_USE_DEBUG=OFF \
-            -DwxWidgets_USE_UNICODE=ON \
-            -DwxWidgets_USE_STATIC=ON
+          emcmake cmake -S upstream-floating-sandbox -B wasm-port-build -DCMAKE_BUILD_TYPE=Release -DFS_BUILD_BENCHMARKS=OFF -DFS_USE_STATIC_LIBS=ON -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" -DJPEG_INCLUDE_DIR="$GITHUB_WORKSPACE/jpeg-install/include" -DJPEG_LIBRARY="$GITHUB_WORKSPACE/jpeg-install/lib/libjpeg.a" -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" -DwxWidgets_ROOT="$GITHUB_WORKSPACE/wxwidgets-install" -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" -DwxWidgets_USE_DEBUG=OFF -DwxWidgets_USE_UNICODE=ON -DwxWidgets_USE_STATIC=ON
 
       - name: Build
         run: |
@@ -149,9 +107,9 @@ jobs:
         run: |
           set -eux
           echo '=== CMake cache ==='
-          test -f wasm-port-build/CMakeCache.txt && grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML' wasm-port-build/CMakeCache.txt || true
+          if [ -f wasm-port-build/CMakeCache.txt ]; then grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX' wasm-port-build/CMakeCache.txt || true; fi
           echo '=== WASM/JS output ==='
-          find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true
+          if [ -d wasm-port-build ]; then find wasm-port-build -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.html' -o -name '*.data' \) -print | sort || true; fi
 
       - name: Upload experimental build logs
         if: always()
