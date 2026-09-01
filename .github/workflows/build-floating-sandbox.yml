@@ -50,7 +50,8 @@ jobs:
 
           cd Floating-Sandbox
 
-          echo "=== Official repository commit ==="
+          echo
+          echo "=== Official Floating Sandbox commit ==="
           git rev-parse HEAD
 
       - name: Download PicoJSON
@@ -68,6 +69,9 @@ jobs:
 
           test -s third_party/picojson/picojson.h
 
+          echo "PicoJSON:"
+          ls -lh third_party/picojson/picojson.h
+
       - name: Prepare Emscripten image libraries
         shell: bash
         run: |
@@ -76,48 +80,41 @@ jobs:
           echo "Preparing zlib..."
           embuilder build zlib
 
+          echo
           echo "Preparing libjpeg..."
           embuilder build libjpeg
 
+          echo
           echo "Preparing libpng..."
           embuilder build libpng
 
-      - name: Inspect actual repository structure
+      - name: Inspect repository structure
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "TOP LEVEL"
-          echo "========================================"
-
-          find Floating-Sandbox \
-            -maxdepth 2 \
-            -type f \
-            | sort \
-            | head -300
-
-          echo
-          echo "========================================"
-          echo "ALL CMAKE FILES"
-          echo "========================================"
-
-          find Floating-Sandbox \
-            -type f \
-            \( -name "CMakeLists.txt" -o -name "*.cmake" \) \
-            | sort
-
-          echo
-          echo "========================================"
-          echo "DIRECTORIES"
+          echo "TOP LEVEL DIRECTORIES"
           echo "========================================"
 
           find Floating-Sandbox \
             -maxdepth 2 \
             -type d \
-            | sort
+            -print \
+            | sort || true
 
-      - name: Locate GameLib automatically
+          echo
+          echo "========================================"
+          echo "CMAKE FILES"
+          echo "========================================"
+
+          find Floating-Sandbox \
+            -type f \
+            \( -name "CMakeLists.txt" -o -name "*.cmake" \) \
+            -print \
+            | sort || true
+
+      - name: Locate GameLib
         shell: bash
         run: |
           set -e
@@ -131,18 +128,33 @@ jobs:
           elif [ -d "Floating-Sandbox/Sources/GameLib" ]; then
             GAMELIB_DIR="Floating-Sandbox/Sources/GameLib"
           else
-            GAMELIB_DIR="$(find Floating-Sandbox -type d -name "GameLib" | head -n 1)"
+            while IFS= read -r dir; do
+              GAMELIB_DIR="$dir"
+              break
+            done < <(
+              find Floating-Sandbox \
+                -type d \
+                -name "GameLib" \
+                -print
+            )
           fi
 
           if [ -z "$GAMELIB_DIR" ]; then
             echo "GameLib directory was not found."
+
             echo
-            echo "Directories containing Game:"
-            find Floating-Sandbox -type d | grep -i game | sort || true
+            echo "Directories containing 'Game':"
+
+            find Floating-Sandbox \
+              -type d \
+              -iname "*game*" \
+              -print \
+              | sort || true
+
             exit 1
           fi
 
-          echo "Found GameLib:"
+          echo "GameLib found at:"
           echo "$GAMELIB_DIR"
 
           echo "GAMELIB_DIR=$GAMELIB_DIR" >> "$GITHUB_ENV"
@@ -153,25 +165,23 @@ jobs:
           set -e
 
           echo "========================================"
-          echo "GAMELIB DIRECTORY"
+          echo "GAMELIB"
           echo "========================================"
 
+          echo "Directory:"
           echo "$GAMELIB_DIR"
 
           echo
-          echo "========================================"
-          echo "GAMELIB FILES"
-          echo "========================================"
+          echo "Files:"
 
           find "$GAMELIB_DIR" \
             -maxdepth 2 \
             -type f \
-            | sort
+            -print \
+            | sort || true
 
           echo
-          echo "========================================"
-          echo "GAMELIB DEPENDENCY REFERENCES"
-          echo "========================================"
+          echo "Dependency references:"
 
           grep -RniE \
             'wxWidgets|SFML|OpenGL|OpenAL|zlib|jpeg|png|pthread|SSE2|NEON|filesystem' \
@@ -180,22 +190,22 @@ jobs:
             --include='*.h' \
             --include='CMakeLists.txt' \
             --include='*.cmake' \
-            2>/dev/null || true
+            || true
 
       - name: Inspect top-level targets
         shell: bash
         run: |
           set -e
 
-          echo "Searching CMake for targets..."
+          echo "Searching for CMake targets..."
 
           grep -RniE \
             'add_library|add_executable|target_link_libraries|target_include_directories' \
             Floating-Sandbox \
             --include='CMakeLists.txt' \
-            | head -400 || true
+            || true
 
-      - name: Attempt browser configuration
+      - name: Configure with Emscripten
         shell: bash
         run: |
           set +e
@@ -203,8 +213,9 @@ jobs:
           rm -rf build-web
           mkdir -p build-web
 
+          echo
           echo "========================================"
-          echo "Attempting Emscripten configuration"
+          echo "STARTING EMSCRIPTEN CONFIGURATION"
           echo "========================================"
 
           emcmake cmake \
@@ -228,22 +239,33 @@ jobs:
 
           echo
           echo "========== LAST 300 LINES =========="
-          tail -n 300 configure.log
+
+          if [ -f configure.log ]; then
+            tail -n 300 configure.log || true
+          fi
 
           echo
-          echo "========== RELEVANT ERRORS =========="
-          grep -n -i \
-            -E "error|failed|not found|could not find|unsupported|fatal" \
-            configure.log \
-            | tail -n 200 || true
+          echo "========== IMPORTANT ERRORS =========="
+
+          if [ -f configure.log ]; then
+            grep -n -i \
+              -E "error|failed|not found|could not find|unsupported|fatal" \
+              configure.log \
+              | tail -n 200 || true
+          fi
 
           exit $RESULT
 
-      - name: Build
+      - name: Build with Emscripten
         if: success()
         shell: bash
         run: |
           set +e
+
+          echo
+          echo "========================================"
+          echo "STARTING EMSCRIPTEN BUILD"
+          echo "========================================"
 
           cmake \
             --build build-web \
@@ -259,34 +281,57 @@ jobs:
 
           echo
           echo "========== LAST 300 LINES =========="
-          tail -n 300 build.log
+
+          if [ -f build.log ]; then
+            tail -n 300 build.log || true
+          fi
 
           echo
-          echo "========== RELEVANT ERRORS =========="
-          grep -n -i \
-            -E "error|failed|not found|fatal|undefined reference|unsupported" \
-            build.log \
-            | tail -n 200 || true
+          echo "========== IMPORTANT ERRORS =========="
+
+          if [ -f build.log ]; then
+            grep -n -i \
+              -E "error|failed|not found|fatal|undefined reference|unsupported" \
+              build.log \
+              | tail -n 200 || true
+          fi
 
           exit $RESULT
 
-      - name: Search for generated Web files
+      - name: Search for generated WebAssembly
         if: always()
         shell: bash
         run: |
-          echo "=== WASM ==="
-          find . -type f -name "*.wasm" -print || true
+          echo "========================================"
+          echo "WASM FILES"
+          echo "========================================"
+
+          find . \
+            -type f \
+            -name "*.wasm" \
+            -print || true
 
           echo
-          echo "=== JS ==="
-          find . -type f -name "*.js" \
+          echo "========================================"
+          echo "DATA FILES"
+          echo "========================================"
+
+          find . \
+            -type f \
+            -name "*.data" \
+            -print || true
+
+          echo
+          echo "========================================"
+          echo "JAVASCRIPT FILES"
+          echo "========================================"
+
+          find . \
+            -type f \
+            -name "*.js" \
             -not -path "./.git/*" \
             -print \
-            | head -300 || true
-
-          echo
-          echo "=== DATA ==="
-          find . -type f -name "*.data" -print || true
+            | sort || true
 
       - name: Upload diagnostics
         if: always()
