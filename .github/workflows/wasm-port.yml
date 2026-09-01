@@ -92,12 +92,23 @@ jobs:
           cd wxwidgets-src
 
           # wxWidgets-wasm expects several bundled libraries as git submodules.
-          # Initialize all of the libraries that its configure script may fall back to.
           git submodule update --init src/jpeg src/zlib src/png src/expat 3rdparty/catch
 
           test -f src/zlib/zlib.h
           test -f src/png/png.c
           test -f src/expat/expat/lib/expat.h
+
+          # The wxWidgets-wasm top-level configure script accepts the Emscripten
+          # host alias, but the bundled Expat configure script has an older
+          # config.sub which rejects the plain "emscripten" host name. Reuse
+          # wxWidgets' working config.sub/config.guess for that nested build.
+          test -f config.sub
+          test -f config.guess
+          test -f src/expat/expat/conftools/config.sub
+          test -f src/expat/expat/conftools/config.guess
+          cp config.sub src/expat/expat/conftools/config.sub
+          cp config.guess src/expat/expat/conftools/config.guess
+          chmod +x src/expat/expat/conftools/config.sub src/expat/expat/conftools/config.guess
 
           export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include -I$EMSDK/upstream/emscripten/system/include"
           export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include -I$EMSDK/upstream/emscripten/system/include"
