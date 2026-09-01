@@ -19,17 +19,29 @@ jobs:
         with:
           version: latest
 
-      - name: Verify tools
+      - name: Verify Emscripten
+        shell: bash
         run: |
           set -e
+
+          echo "=== Emscripten ==="
           emcc --version
           em++ --version
+
+          echo
+          echo "=== CMake ==="
           cmake --version
+
+          echo
+          echo "=== Ninja ==="
           ninja --version
 
       - name: Download official Floating Sandbox
+        shell: bash
         run: |
           set -e
+
+          rm -rf Floating-Sandbox
 
           git clone \
             --depth 1 \
@@ -38,10 +50,11 @@ jobs:
 
           cd Floating-Sandbox
 
-          echo "=== Floating Sandbox commit ==="
+          echo "=== Official repository commit ==="
           git rev-parse HEAD
 
       - name: Download PicoJSON
+        shell: bash
         run: |
           set -e
 
@@ -56,135 +69,224 @@ jobs:
           test -s third_party/picojson/picojson.h
 
       - name: Prepare Emscripten image libraries
+        shell: bash
         run: |
           set -e
 
+          echo "Preparing zlib..."
           embuilder build zlib
+
+          echo "Preparing libjpeg..."
           embuilder build libjpeg
+
+          echo "Preparing libpng..."
           embuilder build libpng
 
-      - name: Inspect upstream CMake
+      - name: Inspect actual repository structure
+        shell: bash
         run: |
           set -e
 
-          echo "=== Top-level CMake ==="
-          sed -n '1,180p' Floating-Sandbox/CMakeLists.txt
+          echo "========================================"
+          echo "TOP LEVEL"
+          echo "========================================"
+
+          find Floating-Sandbox \
+            -maxdepth 2 \
+            -type f \
+            | sort \
+            | head -300
 
           echo
-          echo "=== GameLib CMake ==="
-          sed -n '1,220p' Floating-Sandbox/GameLib/CMakeLists.txt
+          echo "========================================"
+          echo "ALL CMAKE FILES"
+          echo "========================================"
+
+          find Floating-Sandbox \
+            -type f \
+            \( -name "CMakeLists.txt" -o -name "*.cmake" \) \
+            | sort
 
           echo
-          echo "=== FloatingSandbox CMake ==="
-          sed -n '1,220p' Floating-Sandbox/FloatingSandbox/CMakeLists.txt
+          echo "========================================"
+          echo "DIRECTORIES"
+          echo "========================================"
 
-      - name: Find desktop-only dependencies
+          find Floating-Sandbox \
+            -maxdepth 2 \
+            -type d \
+            | sort
+
+      - name: Locate GameLib automatically
+        shell: bash
         run: |
-          echo "=== wxWidgets references ==="
-          grep -Rni "wxWidgets" Floating-Sandbox \
-            --include='CMakeLists.txt' \
-            --include='*.cmake' \
-            || true
+          set -e
+
+          echo "Searching for GameLib..."
+
+          GAMELIB_DIR=""
+
+          if [ -d "Floating-Sandbox/GameLib" ]; then
+            GAMELIB_DIR="Floating-Sandbox/GameLib"
+          elif [ -d "Floating-Sandbox/Sources/GameLib" ]; then
+            GAMELIB_DIR="Floating-Sandbox/Sources/GameLib"
+          else
+            GAMELIB_DIR="$(find Floating-Sandbox -type d -name "GameLib" | head -n 1)"
+          fi
+
+          if [ -z "$GAMELIB_DIR" ]; then
+            echo "GameLib directory was not found."
+            echo
+            echo "Directories containing Game:"
+            find Floating-Sandbox -type d | grep -i game | sort || true
+            exit 1
+          fi
+
+          echo "Found GameLib:"
+          echo "$GAMELIB_DIR"
+
+          echo "GAMELIB_DIR=$GAMELIB_DIR" >> "$GITHUB_ENV"
+
+      - name: Inspect GameLib
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "GAMELIB DIRECTORY"
+          echo "========================================"
+
+          echo "$GAMELIB_DIR"
 
           echo
-          echo "=== SFML references ==="
-          grep -Rni "SFML" Floating-Sandbox \
-            --include='CMakeLists.txt' \
-            --include='*.cmake' \
-            || true
+          echo "========================================"
+          echo "GAMELIB FILES"
+          echo "========================================"
+
+          find "$GAMELIB_DIR" \
+            -maxdepth 2 \
+            -type f \
+            | sort
 
           echo
-          echo "=== OpenGL references ==="
-          grep -Rni "OpenGL" Floating-Sandbox \
+          echo "========================================"
+          echo "GAMELIB DEPENDENCY REFERENCES"
+          echo "========================================"
+
+          grep -RniE \
+            'wxWidgets|SFML|OpenGL|OpenAL|zlib|jpeg|png|pthread|SSE2|NEON|filesystem' \
+            "$GAMELIB_DIR" \
+            --include='*.cpp' \
+            --include='*.h' \
             --include='CMakeLists.txt' \
             --include='*.cmake' \
-            || true
+            2>/dev/null || true
 
-      - name: Attempt GameLib-only Emscripten configuration
+      - name: Inspect top-level targets
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching CMake for targets..."
+
+          grep -RniE \
+            'add_library|add_executable|target_link_libraries|target_include_directories' \
+            Floating-Sandbox \
+            --include='CMakeLists.txt' \
+            | head -400 || true
+
+      - name: Attempt browser configuration
         shell: bash
         run: |
           set +e
 
-          rm -rf gamelib-web
-          mkdir -p gamelib-web
+          rm -rf build-web
+          mkdir -p build-web
 
           echo "========================================"
-          echo "Attempting GameLib-only WebAssembly build"
+          echo "Attempting Emscripten configuration"
           echo "========================================"
 
           emcmake cmake \
-            -S Floating-Sandbox/GameLib \
-            -B gamelib-web \
+            -S Floating-Sandbox \
+            -B build-web \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DFS_BUILD_BENCHMARKS=OFF \
             -DPICOJSON_INCLUDE_DIRS="${GITHUB_WORKSPACE}/third_party/picojson" \
             -DZLIB_USE_STATIC_LIBS=ON \
             -DCMAKE_C_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
             -DCMAKE_CXX_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
-            > gamelib-configure.log 2>&1
+            > configure.log 2>&1
 
           RESULT=$?
 
           echo
           echo "========================================"
-          echo "GAMELIB CONFIGURE EXIT CODE: $RESULT"
+          echo "CONFIGURE EXIT CODE: $RESULT"
           echo "========================================"
 
           echo
-          echo "========== LAST 250 LINES =========="
-          tail -n 250 gamelib-configure.log
+          echo "========== LAST 300 LINES =========="
+          tail -n 300 configure.log
 
           echo
-          echo "========== IMPORTANT ERRORS =========="
+          echo "========== RELEVANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|could not find|unsupported|fatal" \
-            gamelib-configure.log \
-            | tail -n 150 || true
+            configure.log \
+            | tail -n 200 || true
 
           exit $RESULT
 
-      - name: Build GameLib
+      - name: Build
         if: success()
         shell: bash
         run: |
           set +e
 
           cmake \
-            --build gamelib-web \
+            --build build-web \
             --parallel 2 \
-            > gamelib-build.log 2>&1
+            > build.log 2>&1
 
           RESULT=$?
 
           echo
           echo "========================================"
-          echo "GAMELIB BUILD EXIT CODE: $RESULT"
+          echo "BUILD EXIT CODE: $RESULT"
           echo "========================================"
 
           echo
-          echo "========== LAST 250 LINES =========="
-          tail -n 250 gamelib-build.log
+          echo "========== LAST 300 LINES =========="
+          tail -n 300 build.log
 
           echo
-          echo "========== IMPORTANT ERRORS =========="
+          echo "========== RELEVANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|fatal|undefined reference|unsupported" \
-            gamelib-build.log \
-            | tail -n 150 || true
+            build.log \
+            | tail -n 200 || true
 
           exit $RESULT
 
-      - name: Search for WebAssembly output
+      - name: Search for generated Web files
         if: always()
+        shell: bash
         run: |
           echo "=== WASM ==="
-          find . -type f -name "*.wasm" -print
+          find . -type f -name "*.wasm" -print || true
 
           echo
-          echo "=== JavaScript ==="
+          echo "=== JS ==="
           find . -type f -name "*.js" \
             -not -path "./.git/*" \
-            -print | head -250
+            -print \
+            | head -300 || true
+
+          echo
+          echo "=== DATA ==="
+          find . -type f -name "*.data" -print || true
 
       - name: Upload diagnostics
         if: always()
@@ -192,7 +294,7 @@ jobs:
         with:
           name: floating-sandbox-web-diagnostics
           path: |
-            gamelib-configure.log
-            gamelib-build.log
-            gamelib-web/**
+            configure.log
+            build.log
+            build-web/**
           if-no-files-found: ignore
