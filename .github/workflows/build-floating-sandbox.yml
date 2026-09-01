@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-web:
@@ -200,7 +200,7 @@ jobs:
           find . -type f -name "*.js" -not -path "./.git/*" -print | sort || true
           find . -type f -name "*.data" -print || true
 
-      - name: Prepare Cloudflare and Vercel files
+      - name: Prepare browser build artifact
         if: success()
         shell: bash
         run: |
@@ -211,21 +211,9 @@ jobs:
           find web-build-output -type f \( -name "*.js" -o -name "*.wasm" -o -name "*.data" \) -exec cp {} public/floating-sandbox/ \;
           echo "=== Browser files ==="
           find public/floating-sandbox -maxdepth 1 -type f -print | sort
-
-      - name: Publish browser build to GitHub for Vercel
-        if: success()
-        shell: bash
-        run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f public/floating-sandbox
-          if git diff --cached --quiet; then
-            echo "No browser asset changes to commit."
-          else
-            git commit -m "Publish Floating Sandbox browser build"
-            git push origin HEAD:main
-          fi
+          test -f public/floating-sandbox/index.html
+          test -f public/floating-sandbox/floating-sandbox-web.js
+          test -f public/floating-sandbox/floating-sandbox-web.wasm
 
       - name: Upload browser build
         if: always()
