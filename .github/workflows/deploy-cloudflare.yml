@@ -4,7 +4,6 @@ on:
   workflow_run:
     workflows: ["Floating Sandbox Web Build"]
     types: [completed]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,9 +11,7 @@ permissions:
 
 jobs:
   deploy:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
 
     steps:
@@ -22,7 +19,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download browser build artifact
-        if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@v4
         with:
           name: floating-sandbox-browser-build
@@ -40,19 +36,27 @@ jobs:
           ls -la
 
           echo
-          echo "=== public ==="
-          find public -maxdepth 4 -type f -print | sort
+          echo "=== Downloaded files ==="
+          find . -maxdepth 5 -type f \
+            -not -path './.git/*' \
+            | sort
+
+          echo
+          echo "=== Cloudflare public assets ==="
+          find public -maxdepth 5 -type f -print | sort
 
           test -f worker.js
           test -f wrangler.toml
           test -f public/floating-sandbox/index.html
 
-          echo
-          echo "=== Required files ==="
-          find public/floating-sandbox -maxdepth 1 -type f \( -name '*.js' -o -name '*.wasm' -o -name '*.data' \) -print | sort
+          JS_COUNT="$(find public/floating-sandbox -maxdepth 1 -type f -name '*.js' | wc -l)"
+          WASM_COUNT="$(find public/floating-sandbox -maxdepth 1 -type f -name '*.wasm' | wc -l)"
 
-          test "$(find public/floating-sandbox -maxdepth 1 -type f -name '*.js' | wc -l)" -ge 1
-          test "$(find public/floating-sandbox -maxdepth 1 -type f -name '*.wasm' | wc -l)" -ge 1
+          echo "JavaScript files: $JS_COUNT"
+          echo "WASM files: $WASM_COUNT"
+
+          test "$JS_COUNT" -ge 1
+          test "$WASM_COUNT" -ge 1
 
       - name: Install Wrangler
         run: npm install --global wrangler@latest
