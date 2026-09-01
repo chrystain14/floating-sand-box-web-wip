@@ -32,7 +32,7 @@ jobs:
           em++ --version
           command -v emcmake
           emcmake cmake --version
-          echo "EM_SYSROOT=$(dirname "$(dirname "$(command -v emcc)")")" >> "$GITHUB_ENV"
+          echo "EM_SYSROOT=$EMSDK/upstream/emscripten/cache/sysroot" >> "$GITHUB_ENV"
 
       - name: Checkout upstream Floating Sandbox
         run: |
