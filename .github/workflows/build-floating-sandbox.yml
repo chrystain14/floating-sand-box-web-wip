@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-web:
@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Emscripten
         uses: mymindstorm/setup-emsdk@v14
@@ -207,22 +209,36 @@ jobs:
           set -e
           rm -rf public
           mkdir -p public/floating-sandbox
+          cp web-build/index.html public/index.html
           cp web-build/index.html public/floating-sandbox/index.html
+          find web-build-output -type f \( -name "*.js" -o -name "*.wasm" -o -name "*.data" \) -exec cp {} public/ \;
           find web-build-output -type f \( -name "*.js" -o -name "*.wasm" -o -name "*.data" \) -exec cp {} public/floating-sandbox/ \;
           echo "=== Browser files ==="
-          find public/floating-sandbox -maxdepth 1 -type f -print | sort
+          find public -maxdepth 2 -type f -print | sort
+          test -f public/index.html
           test -f public/floating-sandbox/index.html
           test -f public/floating-sandbox/floating-sandbox-web.js
           test -f public/floating-sandbox/floating-sandbox-web.wasm
 
       - name: Upload browser build
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: floating-sandbox-browser-build
-          path: |
-            public/
-            web-build-output/
-            configure.log
-            build.log
-          if-no-files-found: warn
+          path: public/
+          if-no-files-found: error
+
+      - name: Publish browser build to main
+        if: success()
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f public
+          if git diff --cached --quiet; then
+            echo "Browser build already published."
+            exit 0
+          fi
+          git commit -m "Publish Floating Sandbox browser build"
+          git push origin HEAD:main
