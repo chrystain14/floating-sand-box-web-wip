@@ -6,7 +6,7 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
@@ -32,12 +32,8 @@ jobs:
           set -e
           rm -rf public
           mkdir -p public/floating-sandbox
-
           echo "=== Artifact ==="
           find artifact -maxdepth 8 -type f -print | sort
-
-          # The artifact may already contain public/floating-sandbox,
-          # or it may contain the browser files directly.
           if [ -d "artifact/public/floating-sandbox" ]; then
             cp -a artifact/public/floating-sandbox/. public/floating-sandbox/
           elif [ -d "artifact/floating-sandbox" ]; then
@@ -45,7 +41,6 @@ jobs:
           else
             cp -a artifact/. public/floating-sandbox/
           fi
-
           echo "=== Staged assets ==="
           find public -maxdepth 8 -type f -print | sort
 
@@ -54,39 +49,42 @@ jobs:
         run: |
           set -e
           cd public/floating-sandbox
-
-          # Keep the build's real filenames, but normalize the common
-          # UUID-style uploaded names if they are present.
           html="$(find . -maxdepth 1 -type f -name '*.html' | head -n 1)"
           js="$(find . -maxdepth 1 -type f -name '*.js' | head -n 1)"
           wasm="$(find . -maxdepth 1 -type f -name '*.wasm' | head -n 1)"
-
           [ -n "$html" ] && [ "$html" != "./index.html" ] && mv "$html" index.html || true
-
-          if [ -n "$js" ] && [ "$js" != "./floating-sandbox-web.js" ]; then
-            mv "$js" floating-sandbox-web.js
-          fi
-
-          if [ -n "$wasm" ] && [ "$wasm" != "./floating-sandbox-web.wasm" ]; then
-            mv "$wasm" floating-sandbox-web.wasm
-          fi
+          if [ -n "$js" ] && [ "$js" != "./floating-sandbox-web.js" ]; then mv "$js" floating-sandbox-web.js; fi
+          if [ -n "$wasm" ] && [ "$wasm" != "./floating-sandbox-web.wasm" ]; then mv "$wasm" floating-sandbox-web.wasm; fi
 
       - name: Verify Cloudflare files
         shell: bash
         run: |
           set -e
-          echo "=== Final Cloudflare assets ==="
-          find public/floating-sandbox -maxdepth 2 -type f -print | sort
-
           test -f worker.js
           test -f wrangler.toml
           test -f public/floating-sandbox/index.html
           test -f public/floating-sandbox/floating-sandbox-web.js
           test -f public/floating-sandbox/floating-sandbox-web.wasm
-
           echo "HTML: OK"
           echo "JavaScript: OK"
           echo "WASM: OK"
+
+      - name: Publish Vercel site files
+        shell: bash
+        run: |
+          set -e
+          cp public/floating-sandbox/index.html ./index.html
+          cp public/floating-sandbox/floating-sandbox-web.js ./floating-sandbox-web.js
+          cp public/floating-sandbox/floating-sandbox-web.wasm ./floating-sandbox-web.wasm
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f index.html floating-sandbox-web.js floating-sandbox-web.wasm
+          if git diff --cached --quiet; then
+            echo "No Vercel root asset changes."
+          else
+            git commit -m "Publish browser build for Vercel"
+            git push origin HEAD:main
+          fi
 
       - name: Install Wrangler
         run: npm install --global wrangler@latest
