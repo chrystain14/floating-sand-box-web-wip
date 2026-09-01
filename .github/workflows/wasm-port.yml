@@ -74,11 +74,13 @@ jobs:
           set -eux
           git clone --depth 1 https://github.com/ahilss/wxWidgets-wasm.git wxwidgets-src
           cd wxwidgets-src
-          git submodule update --init src/jpeg src/zlib 3rdparty/catch
-          export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$EMSDK/upstream/emscripten/system/include"
-          export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$EMSDK/upstream/emscripten/system/include"
-          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$EMSDK/upstream/emscripten/system/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
-          emconfigure ./configure --host=emscripten --with-cxx=14 --enable-utf8 --enable-universal --disable-shared --disable-exceptions --disable-richtext --without-libtiff --disable-xlocale --with-zlib=sys
+          git submodule update --init src/jpeg src/zlib src/png 3rdparty/catch
+          test -f src/zlib/zlib.h
+          test -f src/png/png.c
+          export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include -I$EMSDK/upstream/emscripten/system/include"
+          export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include -I$EMSDK/upstream/emscripten/system/include"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$EMSDK/upstream/emscripten/system/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
+          emconfigure ./configure --host=emscripten --with-cxx=14 --enable-utf8 --enable-universal --disable-shared --disable-exceptions --disable-richtext --without-libtiff --disable-xlocale --with-zlib=sys --with-libpng=sys
           emmake make -j2
           mkdir -p "$GITHUB_WORKSPACE/wxwidgets-install"
           emmake make install PREFIX="$GITHUB_WORKSPACE/wxwidgets-install"
