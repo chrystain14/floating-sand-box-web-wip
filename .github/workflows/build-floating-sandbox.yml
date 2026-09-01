@@ -20,14 +20,24 @@ jobs:
           version: latest
 
       - name: Verify tools
+        shell: bash
         run: |
           set -e
+
+          echo "=== Emscripten ==="
           emcc --version
           em++ --version
+
+          echo
+          echo "=== CMake ==="
           cmake --version
+
+          echo
+          echo "=== Ninja ==="
           ninja --version
 
       - name: Download official Floating Sandbox
+        shell: bash
         run: |
           set -e
 
@@ -38,10 +48,11 @@ jobs:
 
           cd Floating-Sandbox
 
-          echo "Floating Sandbox commit:"
+          echo "Official Floating Sandbox source:"
           git rev-parse HEAD
 
       - name: Download PicoJSON
+        shell: bash
         run: |
           set -e
 
@@ -55,15 +66,43 @@ jobs:
 
           test -s third_party/picojson/picojson.h
 
-          echo "PicoJSON downloaded:"
-          ls -lh third_party/picojson/picojson.h
-
-      - name: Inspect PicoJSON finder
+      - name: Prepare Emscripten zlib
+        shell: bash
         run: |
-          echo "===== Floating Sandbox FindPicoJSON.cmake ====="
+          set -e
 
-          sed -n '1,160p' \
-            Floating-Sandbox/cmake/FindPicoJSON.cmake
+          echo "Building the Emscripten zlib port..."
+
+          embuilder build zlib
+
+          echo
+          echo "Emscripten cache:"
+          emcc --show-ports
+
+      - name: Create browser build settings
+        shell: bash
+        run: |
+          set -e
+
+          cat > Floating-Sandbox/UserSettings.cmake <<'EOF'
+          # Browser/Emscripten build settings
+
+          # Do not build optional Google Benchmark.
+          set(FS_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+          # Emscripten supplies zlib.
+          set(ZLIB_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+
+          # Tell CMake to prefer the Emscripten sysroot.
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+
+          # Emscripten browser build.
+          set(FS_BROWSER_BUILD ON CACHE BOOL "" FORCE)
+          EOF
+
+          echo "Created UserSettings.cmake:"
+          cat Floating-Sandbox/UserSettings.cmake
 
       - name: Configure with Emscripten
         shell: bash
@@ -82,7 +121,11 @@ jobs:
             -B build-web \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DFS_BUILD_BENCHMARKS=OFF \
             -DPICOJSON_INCLUDE_DIRS="${GITHUB_WORKSPACE}/third_party/picojson" \
+            -DZLIB_USE_STATIC_LIBS=ON \
+            -DCMAKE_C_FLAGS="-sUSE_ZLIB=1" \
+            -DCMAKE_CXX_FLAGS="-sUSE_ZLIB=1" \
             > configure.log 2>&1
 
           RESULT=$?
@@ -93,15 +136,15 @@ jobs:
           echo "========================================"
 
           echo
-          echo "========== LAST 200 LINES =========="
-          tail -n 200 configure.log
+          echo "========== LAST 250 LINES =========="
+          tail -n 250 configure.log
 
           echo
           echo "========== IMPORTANT ERRORS =========="
           grep -n -i \
             -E "error|failed|not found|could not find|unsupported|fatal" \
             configure.log \
-            | tail -n 120 || true
+            | tail -n 150 || true
 
           exit $RESULT
 
@@ -128,19 +171,19 @@ jobs:
           echo "========================================"
 
           echo
-          echo "========== LAST 200 LINES =========="
-          tail -n 200 build.log
+          echo "========== LAST 250 LINES =========="
+          tail -n 250 build.log
 
           echo
           echo "========== IMPORTANT ERRORS =========="
           grep -n -i \
-            -E "error|failed|not found|fatal|undefined reference" \
+            -E "error|failed|not found|fatal|undefined reference|unsupported" \
             build.log \
-            | tail -n 120 || true
+            | tail -n 150 || true
 
           exit $RESULT
 
-      - name: Find WebAssembly output
+      - name: Find generated WebAssembly
         if: always()
         shell: bash
         run: |
@@ -148,15 +191,15 @@ jobs:
           find . -type f -name "*.wasm" -print
 
           echo
+          echo "===== DATA ====="
+          find . -type f -name "*.data" -print
+
+          echo
           echo "===== JavaScript ====="
           find . -type f -name "*.js" \
             -not -path "./.git/*" \
             -print \
             | head -250
-
-          echo
-          echo "===== DATA ====="
-          find . -type f -name "*.data" -print
 
       - name: Upload diagnostics
         if: always()
@@ -167,4 +210,5 @@ jobs:
             configure.log
             build.log
             build-web/**
+            Floating-Sandbox/UserSettings.cmake
           if-no-files-found: ignore
