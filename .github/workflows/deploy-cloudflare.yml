@@ -21,7 +21,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download browser build artifact
+      - name: Download browser build artifact from completed build
         if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@v4
         with:
@@ -30,10 +30,67 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download latest successful browser build artifact for manual run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RUN_ID="$(gh run list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --workflow build-floating-sandbox.yml \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')"
+
+          if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
+            echo "No successful Floating Sandbox Web Build run was found."
+            echo "Run the build workflow successfully first."
+            exit 1
+          fi
+
+          echo "Using successful build run: ${RUN_ID}"
+
+          gh run download "${RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name floating-sandbox-browser-build \
+            --dir .
+
+      - name: Normalize browser build into Cloudflare public directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p public/floating-sandbox
+
+          if [ -d "public/floating-sandbox" ] && [ -f "public/floating-sandbox/index.html" ]; then
+            echo "Artifact already contains public/floating-sandbox."
+          else
+            echo "Searching downloaded artifact for browser files..."
+
+            HTML="$(find . -type f -name 'index.html' -not -path './.git/*' | head -n 1 || true)"
+            JS="$(find . -type f -name '*.js' -not -path './.git/*' | grep -v '/node_modules/' | head -n 1 || true)"
+            WASM="$(find . -type f -name '*.wasm' -not -path './.git/*' | head -n 1 || true)"
+
+            if [ -z "${HTML}" ] || [ -z "${JS}" ] || [ -z "${WASM}" ]; then
+              echo "Could not locate the required HTML, JS, and WASM files in the build artifact."
+              echo "=== Files found ==="
+              find . -type f -not -path './.git/*' | sort
+              exit 1
+            fi
+
+            cp "${HTML}" public/floating-sandbox/index.html
+            cp "${JS}" public/floating-sandbox/
+            cp "${WASM}" public/floating-sandbox/
+          fi
+
       - name: Verify Cloudflare files
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "=== Repository ==="
           pwd
