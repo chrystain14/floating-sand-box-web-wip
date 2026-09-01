@@ -103,7 +103,6 @@ jobs:
           test -f src/zlib/zlib.h
           test -f src/png/png.c
           test -f src/expat/expat/lib/expat.h
-
           test -f config.sub
           test -f config.guess
           test -f src/expat/expat/conftools/config.sub
@@ -111,12 +110,9 @@ jobs:
           cp config.sub src/expat/expat/conftools/config.sub
           cp config.guess src/expat/expat/conftools/config.guess
           chmod +x src/expat/expat/conftools/config.sub src/expat/expat/conftools/config.guess
-
-          # Let Emscripten supply its own compiler/sysroot headers.
           export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
           export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
-
           emconfigure ./configure \
             --host=emscripten \
             --prefix="$GITHUB_WORKSPACE/wxwidgets-install" \
@@ -130,10 +126,8 @@ jobs:
             --disable-xlocale \
             --with-zlib=sys \
             --with-libpng=sys
-
           emmake make -j2
           emmake make install
-
           WX_CONFIG=$(find "$GITHUB_WORKSPACE/wxwidgets-install" -type f -name 'wx-config*' -print -quit)
           test -n "$WX_CONFIG"
           chmod +x "$WX_CONFIG"
@@ -145,12 +139,142 @@ jobs:
           set -eux
           test -n "$WX_CONFIG"
           test -f "$WX_CONFIG"
-          echo "wx-config: $WX_CONFIG"
           wx-config --version
-          echo "=== wx-config --cxxflags ==="
           wx-config --cxxflags
-          echo "=== wx-config --libs ==="
           wx-config --libs
+          for combo in "base" "base,core" "base,core,html" "base,core,propgrid" "base,core,ribbon" "base,core,gl" "base,core,html,propgrid,ribbon"; do
+            echo "--- wx-config --libs $combo ---"
+            wx-config --libs "$combo" || true
+          done
+
+      - name: Build SFML 2.5.1 for WebAssembly
+        run: |
+          set -eux
+          git clone --depth 1 --branch 2.5.1 https://github.com/SFML/SFML.git sfml-src
+          python3 - <<'PY'
+          p = "sfml-src/cmake/Config.cmake"
+          s = open(p, encoding="utf-8").read()
+          marker = 'elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")'
+          insert = '''elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
+              set(SFML_OS_UNIX 1)
+              set(SFML_OS_LINUX 1)
+              set(OPENGL_ES 1)
+          '''
+          assert marker in s
+          s = s.replace(marker, insert + marker, 1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+          mkdir -p sfml-build sfml-install
+          emcmake cmake -S sfml-src -B sfml-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/sfml-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DSFML_BUILD_EXAMPLES=OFF \
+            -DSFML_BUILD_DOC=OFF \
+            -DSFML_BUILD_WINDOW=OFF \
+            -DSFML_BUILD_GRAPHICS=OFF \
+            -DSFML_BUILD_NETWORK=OFF \
+            -DSFML_BUILD_AUDIO=ON \
+            -DSFML_USE_SYSTEM_DEPS=OFF
+          cmake --build sfml-build --parallel 2
+          cmake --install sfml-build
+          test -f sfml-install/include/SFML/Audio.hpp
+          test -f sfml-install/lib/libsfml-system-s.a
+          test -f sfml-install/lib/libsfml-audio-s.a
+
+      - name: Checkout GoogleTest sources
+        run: |
+          set -eux
+          git clone --depth 1 --branch release-1.12.1 https://github.com/google/googletest.git third-party/googletest
+          test -d third-party/googletest/googletest
+
+      - name: Prepare Floating Sandbox WebAssembly compatibility layer
+        run: |
+          set -eux
+          test -f wasm-compat/wx/glcanvas.h
+          test -s wasm-compat/wx/glcanvas.h
+          python3 - <<'PY'
+          p = "upstream-floating-sandbox/Sources/OpenGLCore/glad/glad.c"
+          s = open(p, encoding="utf-8").read()
+          start = s.index("#else\n#include <dlfcn.h>\nstatic void* libGL;")
+          end = s.index("struct gladGLversionStruct GLVersion", start)
+          replacement = r'''#else
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5_webgl.h>
+static void* libGL;
+int open_gl(void) { return 1; }
+void close_gl(void) {}
+void* get_proc(const char *namez) { return emscripten_webgl_get_proc_address(namez); }
+#else
+#include <dlfcn.h>
+static void* libGL;
+#if !defined(__APPLE__) && !defined(__HAIKU__)
+typedef void* (APIENTRYP PFNGLXGETPROCADDRESSPROC_PRIVATE)(const char*);
+static PFNGLXGETPROCADDRESSPROC_PRIVATE gladGetProcAddressPtr;
+#endif
+int open_gl(void) {
+#ifdef __APPLE__
+    static const char *NAMES[] = {
+        "../Frameworks/OpenGL.framework/OpenGL",
+        "/Library/Frameworks/OpenGL.framework/OpenGL",
+        "/System/Library/Frameworks/OpenGL.framework/OpenGL",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL"
+    };
+#else
+    static const char *NAMES[] = {"libGL.so.1", "libGL.so"};
+#endif
+    unsigned int index = 0;
+    for(index = 0; index < (sizeof(NAMES) / sizeof(NAMES[0])); index++) {
+        libGL = dlopen(NAMES[index], RTLD_NOW | RTLD_GLOBAL);
+        if(libGL != NULL) {
+#if defined(__APPLE__) || defined(__HAIKU__)
+            return 1;
+#else
+            gladGetProcAddressPtr = (PFNGLXGETPROCADDRESSPROC_PRIVATE)dlsym(libGL, "glXGetProcAddressARB");
+            return gladGetProcAddressPtr != NULL;
+#endif
+        }
+    }
+    return 0;
+}
+void close_gl(void) {
+    if(libGL != NULL) {
+        dlclose(libGL);
+        libGL = NULL;
+    }
+}
+void* get_proc(const char *namez) {
+    void* result = NULL;
+    if(libGL == NULL) return NULL;
+#if !defined(__APPLE__) && !defined(__HAIKU__)
+    if(gladGetProcAddressPtr != NULL) result = gladGetProcAddressPtr(namez);
+#endif
+    if(result == NULL) {
+#if defined(_WIN32) || defined(__CYGWIN__)
+        result = (void*)GetProcAddress((HMODULE) libGL, namez);
+#else
+        result = dlsym(libGL, namez);
+#endif
+    }
+    return result;
+}
+#endif
+
+'''
+          s = s[:start] + replacement + s[end:]
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          cat > upstream-floating-sandbox/cmake/FindOpenGL.cmake <<'CMAKE'
+          include_guard()
+          set(OpenGL_FOUND TRUE)
+          set(OPENGL_FOUND TRUE)
+          set(OPENGL_LIBRARIES "")
+          set(OPENGL_INCLUDE_DIRS "")
+          if(NOT TARGET OpenGL::GL)
+            add_library(OpenGL::GL INTERFACE IMPORTED)
+          endif()
+          CMAKE
 
       - name: Configure Emscripten build
         run: |
@@ -158,15 +282,9 @@ jobs:
           rm -rf wasm-port-build
           mkdir -p wasm-port-build
           test -n "$WX_CONFIG"
-          wx-config --version
-          wx-config --libs
 
-          # This workflow deliberately uses a wx-config based finder because
-          # the upstream copy of FindwxWidgets.cmake incorrectly re-roots WASM
-          # library checks into the Emscripten sysroot.
           cat > upstream-floating-sandbox/cmake/FindwxWidgets.cmake <<'CMAKE'
           include(FindPackageHandleStandardArgs)
-
           if(NOT wxWidgets_CONFIG_EXECUTABLE)
             if(DEFINED ENV{WX_CONFIG} AND EXISTS "$ENV{WX_CONFIG}")
               set(wxWidgets_CONFIG_EXECUTABLE "$ENV{WX_CONFIG}")
@@ -174,35 +292,18 @@ jobs:
               find_program(wxWidgets_CONFIG_EXECUTABLE NAMES wx-config wx-config-3.1)
             endif()
           endif()
-
           set(wxWidgets_FOUND FALSE)
           set(wxWidgets_INCLUDE_DIRS "")
           set(wxWidgets_LIBRARIES "")
           set(wxWidgets_LIBRARY_DIRS "")
           set(wxWidgets_CXX_FLAGS "")
           set(wxWidgets_DEFINITIONS "")
-
           if(wxWidgets_CONFIG_EXECUTABLE)
-            execute_process(
-              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags
-              OUTPUT_VARIABLE _wx_cxxflags_raw
-              RESULT_VARIABLE _wx_cxxflags_ret
-              OUTPUT_STRIP_TRAILING_WHITESPACE
-              ERROR_QUIET
-            )
-
-            execute_process(
-              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs
-              OUTPUT_VARIABLE _wx_libs_raw
-              RESULT_VARIABLE _wx_libs_ret
-              OUTPUT_STRIP_TRAILING_WHITESPACE
-              ERROR_QUIET
-            )
-
+            execute_process(COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags OUTPUT_VARIABLE _wx_cxxflags_raw RESULT_VARIABLE _wx_cxxflags_ret OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            execute_process(COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs OUTPUT_VARIABLE _wx_libs_raw RESULT_VARIABLE _wx_libs_ret OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
             if(_wx_cxxflags_ret EQUAL 0 AND _wx_libs_ret EQUAL 0)
               separate_arguments(_wx_cxxflags NATIVE_COMMAND "${_wx_cxxflags_raw}")
               separate_arguments(_wx_libs NATIVE_COMMAND "${_wx_libs_raw}")
-
               foreach(_arg IN LISTS _wx_cxxflags)
                 if(_arg MATCHES "^-I(.+)$")
                   list(APPEND wxWidgets_INCLUDE_DIRS "${CMAKE_MATCH_1}")
@@ -212,7 +313,6 @@ jobs:
                   list(APPEND wxWidgets_CXX_FLAGS "${_arg}")
                 endif()
               endforeach()
-
               foreach(_arg IN LISTS _wx_libs)
                 if(_arg MATCHES "^-L(.+)$")
                   list(APPEND wxWidgets_LIBRARY_DIRS "${CMAKE_MATCH_1}")
@@ -220,24 +320,17 @@ jobs:
                   list(APPEND wxWidgets_LIBRARIES "${_arg}")
                 endif()
               endforeach()
-
               set(wxWidgets_FOUND TRUE)
             endif()
           endif()
-
-          find_package_handle_standard_args(wxWidgets
-            REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES
-          )
+          find_package_handle_standard_args(wxWidgets REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES)
           CMAKE
-
-          # wxGLCanvas is not implemented by the WASM wxWidgets port, so remove
-          # that component from Floating Sandbox's dependency request.
-          sed -i 's/find_package(wxWidgets REQUIRED base core gl html propgrid ribbon)/find_package(wxWidgets REQUIRED base core html propgrid ribbon)/' upstream-floating-sandbox/CMakeLists.txt
 
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DFS_BUILD_BENCHMARKS=OFF \
             -DFS_USE_STATIC_LIBS=ON \
+            -DGTEST_DIR="$GITHUB_WORKSPACE/third-party/googletest" \
             -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" \
             -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
             -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
@@ -251,7 +344,11 @@ jobs:
             -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
             -DwxWidgets_USE_DEBUG=OFF \
             -DwxWidgets_USE_UNICODE=ON \
-            -DwxWidgets_USE_STATIC=ON
+            -DwxWidgets_USE_STATIC=ON \
+            -DSFML_ROOT="$GITHUB_WORKSPACE/sfml-install" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/sfml-install" \
+            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/wasm-compat -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sOFFSCREENCANVAS_SUPPORT=1 -sALLOW_MEMORY_GROWTH=1 -pthread" \
+            -DCMAKE_EXE_LINKER_FLAGS="-sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sOFFSCREENCANVAS_SUPPORT=1 -sALLOW_MEMORY_GROWTH=1 -pthread"
 
       - name: Build
         run: |
@@ -264,7 +361,7 @@ jobs:
           set -eux
           echo '=== CMake cache ==='
           if [ -f wasm-port-build/CMakeCache.txt ]; then
-            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX|SFML' wasm-port-build/CMakeCache.txt || true
+            grep -E 'CMAKE_CXX_COMPILER|CMAKE_C_COMPILER|PICOJSON|ZLIB|JPEG|PNG|wxWidgets|WX|SFML|OpenGL' wasm-port-build/CMakeCache.txt || true
           fi
           echo '=== WASM/JS output ==='
           if [ -d wasm-port-build ]; then
