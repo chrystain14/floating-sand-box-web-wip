@@ -1,0 +1,37 @@
+name: Floating Sandbox Web Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Check tools
+        run: |
+          emcc --version
+          em++ --version
+          emcmake --version
+          cmake --version
+
+      - name: Download Floating Sandbox
+        run: |
+          git clone --depth 1 \
+            https://github.com/GabrieleGiuseppini/Floating-Sandbox.git \
+            Floating-Sandbox
+
+      - name: Show source
+        run: |
+          cd Floating-Sandbox
+          echo "Floating Sandbox source downloaded."
+          git rev-parse HEAD
+          find Sources -maxdepth 2 -name CMakeLists.txt | sort
