@@ -7,8 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-web:
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -19,8 +19,7 @@ jobs:
         with:
           version: latest
 
-      - name: Verify toolchain
-        shell: bash
+      - name: Verify Emscripten
         run: |
           set -e
 
@@ -37,24 +36,22 @@ jobs:
           ninja --version
 
       - name: Download official Floating Sandbox
-        shell: bash
         run: |
           set -e
 
-          rm -rf Floating-Sandbox
+          rm -rf upstream
 
           git clone \
             --depth 1 \
             https://github.com/GabrieleGiuseppini/Floating-Sandbox.git \
-            Floating-Sandbox
+            upstream/Floating-Sandbox
 
-          cd Floating-Sandbox
+          cd upstream/Floating-Sandbox
 
-          echo "=== Upstream commit ==="
+          echo "Official commit:"
           git rev-parse HEAD
 
       - name: Download PicoJSON
-        shell: bash
         run: |
           set -e
 
@@ -68,8 +65,7 @@ jobs:
 
           test -s third_party/picojson/picojson.h
 
-      - name: Prepare Emscripten image libraries
-        shell: bash
+      - name: Prepare Emscripten libraries
         run: |
           set -e
 
@@ -77,117 +73,391 @@ jobs:
           embuilder build libjpeg
           embuilder build libpng
 
-      - name: Inspect actual source layout
-        shell: bash
+      - name: Show actual Floating Sandbox source structure
         run: |
           set -e
 
-          echo "========================================"
-          echo "DIRECTORIES"
-          echo "========================================"
+          echo "=== Sources ==="
 
-          find Floating-Sandbox \
+          find upstream/Floating-Sandbox/Sources \
             -maxdepth 2 \
             -type d \
             -print \
             | sort || true
 
           echo
-          echo "========================================"
-          echo "CMAKE FILES"
-          echo "========================================"
+          echo "=== CMake files ==="
 
-          find Floating-Sandbox \
+          find upstream/Floating-Sandbox/Sources \
             -type f \
-            \( -name "CMakeLists.txt" -o -name "*.cmake" \) \
+            -name "CMakeLists.txt" \
             -print \
             | sort || true
 
+      # ---------------------------------------------------------
+      # Create a separate browser build project.
+      # We do NOT use the upstream desktop CMakeLists.txt because
+      # that requires wxWidgets/SFML/OpenGL desktop components.
+      # ---------------------------------------------------------
+
+      - name: Create WebAssembly build project
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf web-build
+          mkdir -p web-build
+
+          cat > web-build/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+
+          project(
+              FloatingSandboxWeb
+              LANGUAGES CXX
+          )
+
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+          if(NOT DEFINED FLOATING_SANDBOX_SOURCE)
+              message(FATAL_ERROR
+                  "FLOATING_SANDBOX_SOURCE was not provided"
+              )
+          endif()
+
+          message(STATUS "")
+          message(STATUS "========================================")
+          message(STATUS "Floating Sandbox Browser Build")
+          message(STATUS "========================================")
+          message(STATUS "")
+          message(STATUS "Source:")
+          message(STATUS "${FLOATING_SANDBOX_SOURCE}")
+
+          # -----------------------------------------------------
+          # Locate upstream source directories.
+          # -----------------------------------------------------
+
+          set(FS_CORE
+              "${FLOATING_SANDBOX_SOURCE}/Sources/Core"
+          )
+
+          set(FS_SIMULATION
+              "${FLOATING_SANDBOX_SOURCE}/Sources/Simulation"
+          )
+
+          set(FS_RENDER
+              "${FLOATING_SANDBOX_SOURCE}/Sources/Render"
+          )
+
+          set(FS_OPENGL_CORE
+              "${FLOATING_SANDBOX_SOURCE}/Sources/OpenGLCore"
+          )
+
+          foreach(required_dir
+              ${FS_CORE}
+              ${FS_SIMULATION}
+              ${FS_RENDER}
+              ${FS_OPENGL_CORE}
+          )
+
+              if(NOT EXISTS "${required_dir}")
+
+                  message(
+                      FATAL_ERROR
+                      "Required upstream directory does not exist: ${required_dir}"
+                  )
+
+              endif()
+
+          endforeach()
+
+          # -----------------------------------------------------
+          # Include paths.
+          # -----------------------------------------------------
+
+          include_directories(
+              "${FLOATING_SANDBOX_SOURCE}/Sources"
+              "${FS_CORE}"
+              "${FS_SIMULATION}"
+              "${FS_RENDER}"
+              "${FS_OPENGL_CORE}"
+          )
+
+          # -----------------------------------------------------
+          # Browser entry point.
+          # -----------------------------------------------------
+
+          add_executable(
+              floating-sandbox-web
+              main.cpp
+          )
+
+          target_compile_definitions(
+              floating-sandbox-web
+              PRIVATE
+              FS_EMSCRIPTEN=1
+          )
+
+          if(EMSCRIPTEN)
+
+              target_compile_options(
+                  floating-sandbox-web
+                  PRIVATE
+                  -pthread
+              )
+
+              target_link_options(
+                  floating-sandbox-web
+                  PRIVATE
+
+                  "-sWASM=1"
+
+                  "-sALLOW_MEMORY_GROWTH=1"
+
+                  "-sMAXIMUM_MEMORY=1073741824"
+
+                  "-sUSE_WEBGL2=1"
+
+                  "-sFULL_ES3=1"
+
+                  "-sNO_EXIT_RUNTIME=1"
+
+                  "-sASSERTIONS=1"
+
+                  "-sENVIRONMENT=web"
+
+                  "-sMODULARIZE=1"
+
+                  "-sEXPORT_ES6=1"
+
+                  "-sEXPORTED_FUNCTIONS=['_main']"
+
+                  "-sEXPORTED_RUNTIME_METHODS=['FS','UTF8ToString']"
+
+                  "-sUSE_ZLIB=1"
+
+                  "-sUSE_LIBJPEG=1"
+
+                  "-sUSE_LIBPNG=1"
+              )
+
+          endif()
+
+          # -----------------------------------------------------
+          # Start with the browser entry point only.
+          #
+          # The next stage will progressively bring the upstream
+          # Core/Simulation/Render code into this target after
+          # determining which platform-specific pieces need a
+          # WebGL replacement.
+          # -----------------------------------------------------
+
+          EOF
+
+          cat > web-build/main.cpp <<'EOF'
+          #include <emscripten.h>
+          #include <iostream>
+
+          extern "C"
+          {
+
+          EMSCRIPTEN_KEEPALIVE
+          int FloatingSandboxWebVersion()
+          {
+              return 1;
+          }
+
+          }
+
+          int main()
+          {
+              std::cout
+                  << "Floating Sandbox WebAssembly bootstrap started."
+                  << std::endl;
+
+              return 0;
+          }
+          EOF
+
+          cat > web-build/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+
+              <meta charset="utf-8">
+
+              <meta
+                  name="viewport"
+                  content="width=device-width, initial-scale=1"
+              >
+
+              <title>Floating Sandbox Web</title>
+
+              <style>
+
+                  html,
+                  body {
+                      margin: 0;
+                      width: 100%;
+                      height: 100%;
+                      overflow: hidden;
+                      background: #05080d;
+                      color: white;
+                      font-family: Arial, sans-serif;
+                  }
+
+                  #loading {
+                      position: fixed;
+                      inset: 0;
+
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+
+                      background: #05080d;
+
+                      z-index: 10;
+                  }
+
+                  #loading-content {
+                      text-align: center;
+                  }
+
+                  #game {
+                      display: block;
+
+                      width: 100%;
+                      height: 100%;
+
+                      background: #000;
+                  }
+
+                  #status {
+                      opacity: 0.7;
+                      margin-top: 10px;
+                  }
+
+              </style>
+
+          </head>
+
+          <body>
+
+              <div id="loading">
+
+                  <div id="loading-content">
+
+                      <h1>🚢 Floating Sandbox Web</h1>
+
+                      <div id="status">
+                          Loading WebAssembly...
+                      </div>
+
+                  </div>
+
+              </div>
+
+              <canvas
+                  id="game"
+                  tabindex="0"
+              ></canvas>
+
+              <script type="module">
+
+                  const canvas =
+                      document.getElementById("game");
+
+                  const loading =
+                      document.getElementById("loading");
+
+                  const status =
+                      document.getElementById("status");
+
+                  window.Module = {
+
+                      canvas: canvas,
+
+                      print(text) {
+                          console.log(
+                              "[Floating Sandbox]",
+                              text
+                          );
+                      },
+
+                      printErr(text) {
+                          console.error(
+                              "[Floating Sandbox]",
+                              text
+                          );
+                      },
+
+                      onRuntimeInitialized() {
+
+                          status.textContent =
+                              "WebAssembly initialized.";
+
+                          loading.style.display =
+                              "none";
+
+                      }
+
+                  };
+
+                  try {
+
+                      const module =
+                          await import(
+                              "./floating-sandbox-web.js"
+                          );
+
+                      const factory =
+                          module.default || module;
+
+                      if(typeof factory === "function") {
+
+                          await factory({
+                              canvas: canvas
+                          });
+
+                      }
+
+                  } catch(error) {
+
+                      console.error(error);
+
+                      status.textContent =
+                          "WebAssembly failed to load.";
+
+                  }
+
+              </script>
+
+          </body>
+          </html>
+          EOF
+
           echo
-          echo "========================================"
-          echo "SOURCES/GAME"
-          echo "========================================"
+          echo "=== Generated browser project ==="
 
-          if [ -d "Floating-Sandbox/Sources/Game" ]; then
-            find Floating-Sandbox/Sources/Game \
-              -maxdepth 2 \
-              -type f \
-              -print \
-              | sort || true
-          else
-            echo "Sources/Game does not exist."
-          fi
+          find web-build \
+            -maxdepth 1 \
+            -type f \
+            -print \
+            | sort
 
-      - name: Inspect Game source dependencies
-        shell: bash
-        run: |
-          set -e
-
-          if [ -d "Floating-Sandbox/Sources/Game" ]; then
-
-            echo "========================================"
-            echo "GAME DEPENDENCIES"
-            echo "========================================"
-
-            grep -RniE \
-              'wxWidgets|wx/|SFML|OpenGL|OpenAL|GL/|pthread|filesystem|SSE2|NEON|Emscripten' \
-              Floating-Sandbox/Sources/Game \
-              --include='*.cpp' \
-              --include='*.h' \
-              --include='CMakeLists.txt' \
-              2>/dev/null \
-              || true
-
-            echo
-            echo "========================================"
-            echo "GAME SOURCE COUNT"
-            echo "========================================"
-
-            find Floating-Sandbox/Sources/Game \
-              -type f \
-              \( -name '*.cpp' -o -name '*.h' \) \
-              -print \
-              | wc -l
-
-          fi
-
-      - name: Inspect top-level build targets
-        shell: bash
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "TARGET DEFINITIONS"
-          echo "========================================"
-
-          grep -RniE \
-            'add_library|add_executable|target_link_libraries|target_sources' \
-            Floating-Sandbox \
-            --include='CMakeLists.txt' \
-            | sort || true
-
-      - name: Configure native project with Emscripten
+      - name: Configure browser project
         shell: bash
         run: |
           set +e
 
-          rm -rf build-web
-          mkdir -p build-web
-
-          echo "========================================"
-          echo "STARTING EMSCRIPTEN CONFIGURATION"
-          echo "========================================"
+          rm -rf web-build-output
 
           emcmake cmake \
-            -S Floating-Sandbox \
-            -B build-web \
+            -S web-build \
+            -B web-build-output \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DFS_BUILD_BENCHMARKS=OFF \
-            -DPICOJSON_INCLUDE_DIRS="${GITHUB_WORKSPACE}/third_party/picojson" \
-            -DZLIB_USE_STATIC_LIBS=ON \
-            -DCMAKE_C_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
-            -DCMAKE_CXX_FLAGS="-sUSE_ZLIB=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG=1" \
+            -DFLOATING_SANDBOX_SOURCE="${GITHUB_WORKSPACE}/upstream/Floating-Sandbox" \
             > configure.log 2>&1
 
           RESULT=$?
@@ -197,33 +467,27 @@ jobs:
           echo "CONFIGURE EXIT CODE: $RESULT"
           echo "========================================"
 
-          echo
-          echo "========== LAST 250 LINES =========="
-
           tail -n 250 configure.log || true
 
           echo
-          echo "========== IMPORTANT ERRORS =========="
+          echo "=== Errors ==="
 
           grep -n -i \
-            -E "error|failed|not found|could not find|unsupported|fatal" \
+            -E "error|failed|fatal|not found|unsupported" \
             configure.log \
-            | tail -n 150 || true
+            | tail -n 150 \
+            || true
 
           exit $RESULT
 
-      - name: Build with Emscripten
+      - name: Build browser WebAssembly
         if: success()
         shell: bash
         run: |
           set +e
 
-          echo "========================================"
-          echo "STARTING EMSCRIPTEN BUILD"
-          echo "========================================"
-
           cmake \
-            --build build-web \
+            --build web-build-output \
             --parallel 2 \
             > build.log 2>&1
 
@@ -234,63 +498,97 @@ jobs:
           echo "BUILD EXIT CODE: $RESULT"
           echo "========================================"
 
-          echo
-          echo "========== LAST 250 LINES =========="
-
-          tail -n 250 build.log || true
+          tail -n 300 build.log || true
 
           echo
-          echo "========== IMPORTANT ERRORS =========="
+          echo "=== Errors ==="
 
           grep -n -i \
-            -E "error|failed|not found|fatal|undefined reference|unsupported" \
+            -E "error|failed|fatal|not found|unsupported|undefined reference" \
             build.log \
-            | tail -n 150 || true
+            | tail -n 200 \
+            || true
 
           exit $RESULT
 
-      - name: Search for WebAssembly output
+      - name: Inspect generated WASM
         if: always()
         shell: bash
         run: |
-          echo "========================================"
-          echo "WASM FILES"
-          echo "========================================"
+          echo "=== WASM ==="
 
           find . \
             -type f \
             -name "*.wasm" \
-            -print || true
+            -print \
+            || true
 
           echo
-          echo "========================================"
-          echo "DATA FILES"
-          echo "========================================"
-
-          find . \
-            -type f \
-            -name "*.data" \
-            -print || true
-
-          echo
-          echo "========================================"
-          echo "JAVASCRIPT FILES"
-          echo "========================================"
+          echo "=== JavaScript ==="
 
           find . \
             -type f \
             -name "*.js" \
             -not -path "./.git/*" \
             -print \
-            | sort || true
+            | sort \
+            || true
 
-      - name: Upload diagnostics
+          echo
+          echo "=== DATA ==="
+
+          find . \
+            -type f \
+            -name "*.data" \
+            -print \
+            || true
+
+      - name: Prepare Cloudflare files
+        if: success()
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf public
+
+          mkdir -p public/floating-sandbox
+
+          cp web-build/index.html \
+            public/floating-sandbox/index.html
+
+          find web-build-output \
+            -type f \
+            \( \
+              -name "*.js" \
+              -o -name "*.wasm" \
+              -o -name "*.data" \
+            \) \
+            -exec cp {} public/floating-sandbox/ \;
+
+          cp -r \
+            upstream/Floating-Sandbox/Data \
+            public/floating-sandbox/
+
+          cp -r \
+            upstream/Floating-Sandbox/Ships \
+            public/floating-sandbox/
+
+          echo
+          echo "=== Cloudflare output ==="
+
+          find public \
+            -type f \
+            -print \
+            | sort
+
+      - name: Upload browser build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: floating-sandbox-web-diagnostics
+          name: floating-sandbox-browser-build
           path: |
+            public/
+            web-build-output/
             configure.log
             build.log
-            build-web/**
-          if-no-files-found: ignore
+          if-no-files-found: warn
