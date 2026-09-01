@@ -50,7 +50,11 @@ jobs:
           set -eux
           git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git zlib-src
           mkdir -p zlib-build zlib-install
-          emcmake cmake -S zlib-src -B zlib-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" -DBUILD_SHARED_LIBS=OFF -DZLIB_BUILD_TESTING=OFF
+          emcmake cmake -S zlib-src -B zlib-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/zlib-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DZLIB_BUILD_TESTING=OFF
           cmake --build zlib-build --parallel 2
           cmake --install zlib-build
           test -f zlib-install/include/zlib.h
@@ -61,7 +65,12 @@ jobs:
           set -eux
           git clone --depth 1 --branch 3.1.1 https://github.com/libjpeg-turbo/libjpeg-turbo.git jpeg-src
           mkdir -p jpeg-build jpeg-install
-          emcmake cmake -S jpeg-src -B jpeg-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/jpeg-install" -DENABLE_SHARED=OFF -DWITH_TURBOJPEG=OFF -DWITH_SIMD=OFF
+          emcmake cmake -S jpeg-src -B jpeg-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/jpeg-install" \
+            -DENABLE_SHARED=OFF \
+            -DWITH_TURBOJPEG=OFF \
+            -DWITH_SIMD=OFF
           cmake --build jpeg-build --parallel 2
           cmake --install jpeg-build
           test -f jpeg-install/include/jpeglib.h
@@ -72,7 +81,14 @@ jobs:
           set -eux
           git clone --depth 1 --branch v1.6.50 https://github.com/pnggroup/libpng.git png-src
           mkdir -p png-build png-install
-          emcmake cmake -S png-src -B png-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" -DPNG_SHARED=OFF -DPNG_TESTS=OFF -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a"
+          emcmake cmake -S png-src -B png-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/png-install" \
+            -DPNG_SHARED=OFF \
+            -DPNG_TESTS=OFF \
+            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
+            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
+            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a"
           cmake --build png-build --parallel 2
           cmake --install png-build
           test -f png-install/include/png.h
@@ -96,13 +112,11 @@ jobs:
           cp config.guess src/expat/expat/conftools/config.guess
           chmod +x src/expat/expat/conftools/config.sub src/expat/expat/conftools/config.guess
 
-          # Do not manually add Emscripten's source-tree include directory.
+          # Let Emscripten supply its own compiler/sysroot headers.
           export CFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
           export CXXFLAGS="-I$GITHUB_WORKSPACE/zlib-install/include -I$GITHUB_WORKSPACE/png-install/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -sERROR_ON_UNDEFINED_SYMBOLS=0"
 
-          # Configure with the final install prefix so wx-config points at the
-          # actual GitHub Actions workspace instead of /usr/local.
           emconfigure ./configure \
             --host=emscripten \
             --prefix="$GITHUB_WORKSPACE/wxwidgets-install" \
@@ -146,6 +160,76 @@ jobs:
           test -n "$WX_CONFIG"
           wx-config --version
           wx-config --libs
+
+          # Floating Sandbox ships an older copy of FindwxWidgets.cmake that
+          # tries to re-discover every -l... item and does not understand some
+          # wxWidgets-WASM library names. Replace it with a small wx-config
+          # based finder that preserves the actual flags from the working build.
+          cat > upstream-floating-sandbox/cmake/FindwxWidgets.cmake <<'CMAKE'
+          include(FindPackageHandleStandardArgs)
+
+          if(NOT wxWidgets_CONFIG_EXECUTABLE)
+            if(DEFINED ENV{WX_CONFIG} AND EXISTS "$ENV{WX_CONFIG}")
+              set(wxWidgets_CONFIG_EXECUTABLE "$ENV{WX_CONFIG}")
+            else()
+              find_program(wxWidgets_CONFIG_EXECUTABLE NAMES wx-config wx-config-3.1)
+            endif()
+          endif()
+
+          set(wxWidgets_FOUND FALSE)
+          set(wxWidgets_INCLUDE_DIRS "")
+          set(wxWidgets_LIBRARIES "")
+          set(wxWidgets_LIBRARY_DIRS "")
+          set(wxWidgets_CXX_FLAGS "")
+          set(wxWidgets_DEFINITIONS "")
+
+          if(wxWidgets_CONFIG_EXECUTABLE)
+            execute_process(
+              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --cxxflags
+              OUTPUT_VARIABLE _wx_cxxflags_raw
+              RESULT_VARIABLE _wx_cxxflags_ret
+              OUTPUT_STRIP_TRAILING_WHITESPACE
+              ERROR_QUIET
+            )
+
+            execute_process(
+              COMMAND "${wxWidgets_CONFIG_EXECUTABLE}" --libs
+              OUTPUT_VARIABLE _wx_libs_raw
+              RESULT_VARIABLE _wx_libs_ret
+              OUTPUT_STRIP_TRAILING_WHITESPACE
+              ERROR_QUIET
+            )
+
+            if(_wx_cxxflags_ret EQUAL 0 AND _wx_libs_ret EQUAL 0)
+              separate_arguments(_wx_cxxflags NATIVE_COMMAND "${_wx_cxxflags_raw}")
+              separate_arguments(_wx_libs NATIVE_COMMAND "${_wx_libs_raw}")
+
+              foreach(_arg IN LISTS _wx_cxxflags)
+                if(_arg MATCHES "^-I(.+)$")
+                  list(APPEND wxWidgets_INCLUDE_DIRS "${CMAKE_MATCH_1}")
+                elseif(_arg MATCHES "^-D(.+)$")
+                  list(APPEND wxWidgets_DEFINITIONS "${CMAKE_MATCH_1}")
+                else()
+                  list(APPEND wxWidgets_CXX_FLAGS "${_arg}")
+                endif()
+              endforeach()
+
+              foreach(_arg IN LISTS _wx_libs)
+                if(_arg MATCHES "^-L(.+)$")
+                  list(APPEND wxWidgets_LIBRARY_DIRS "${CMAKE_MATCH_1}")
+                else()
+                  list(APPEND wxWidgets_LIBRARIES "${_arg}")
+                endif()
+              endforeach()
+
+              set(wxWidgets_FOUND TRUE)
+            endif()
+          endif()
+
+          find_package_handle_standard_args(wxWidgets
+            REQUIRED_VARS wxWidgets_CONFIG_EXECUTABLE wxWidgets_INCLUDE_DIRS wxWidgets_LIBRARIES
+          )
+          CMAKE
 
           emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
             -DCMAKE_BUILD_TYPE=Release \
