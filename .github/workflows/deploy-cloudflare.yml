@@ -22,41 +22,71 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: floating-sandbox-browser-build
-          path: .
+          path: artifact
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage Cloudflare assets
+        shell: bash
+        run: |
+          set -e
+          rm -rf public
+          mkdir -p public/floating-sandbox
+
+          echo "=== Artifact ==="
+          find artifact -maxdepth 8 -type f -print | sort
+
+          # The artifact may already contain public/floating-sandbox,
+          # or it may contain the browser files directly.
+          if [ -d "artifact/public/floating-sandbox" ]; then
+            cp -a artifact/public/floating-sandbox/. public/floating-sandbox/
+          elif [ -d "artifact/floating-sandbox" ]; then
+            cp -a artifact/floating-sandbox/. public/floating-sandbox/
+          else
+            cp -a artifact/. public/floating-sandbox/
+          fi
+
+          echo "=== Staged assets ==="
+          find public -maxdepth 8 -type f -print | sort
+
+      - name: Normalize browser filenames
+        shell: bash
+        run: |
+          set -e
+          cd public/floating-sandbox
+
+          # Keep the build's real filenames, but normalize the common
+          # UUID-style uploaded names if they are present.
+          html="$(find . -maxdepth 1 -type f -name '*.html' | head -n 1)"
+          js="$(find . -maxdepth 1 -type f -name '*.js' | head -n 1)"
+          wasm="$(find . -maxdepth 1 -type f -name '*.wasm' | head -n 1)"
+
+          [ -n "$html" ] && [ "$html" != "./index.html" ] && mv "$html" index.html || true
+
+          if [ -n "$js" ] && [ "$js" != "./floating-sandbox-web.js" ]; then
+            mv "$js" floating-sandbox-web.js
+          fi
+
+          if [ -n "$wasm" ] && [ "$wasm" != "./floating-sandbox-web.wasm" ]; then
+            mv "$wasm" floating-sandbox-web.wasm
+          fi
 
       - name: Verify Cloudflare files
         shell: bash
         run: |
           set -e
-
-          echo "=== Repository ==="
-          pwd
-          ls -la
-
-          echo
-          echo "=== Downloaded files ==="
-          find . -maxdepth 5 -type f \
-            -not -path './.git/*' \
-            | sort
-
-          echo
-          echo "=== Cloudflare public assets ==="
-          find public -maxdepth 5 -type f -print | sort
+          echo "=== Final Cloudflare assets ==="
+          find public/floating-sandbox -maxdepth 2 -type f -print | sort
 
           test -f worker.js
           test -f wrangler.toml
           test -f public/floating-sandbox/index.html
+          test -f public/floating-sandbox/floating-sandbox-web.js
+          test -f public/floating-sandbox/floating-sandbox-web.wasm
 
-          JS_COUNT="$(find public/floating-sandbox -maxdepth 1 -type f -name '*.js' | wc -l)"
-          WASM_COUNT="$(find public/floating-sandbox -maxdepth 1 -type f -name '*.wasm' | wc -l)"
-
-          echo "JavaScript files: $JS_COUNT"
-          echo "WASM files: $WASM_COUNT"
-
-          test "$JS_COUNT" -ge 1
-          test "$WASM_COUNT" -ge 1
+          echo "HTML: OK"
+          echo "JavaScript: OK"
+          echo "WASM: OK"
 
       - name: Install Wrangler
         run: npm install --global wrangler@latest
