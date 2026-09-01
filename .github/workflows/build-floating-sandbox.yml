@@ -19,7 +19,7 @@ jobs:
         with:
           version: latest
 
-      - name: Verify Emscripten
+      - name: Verify toolchain
         shell: bash
         run: |
           set -e
@@ -50,8 +50,7 @@ jobs:
 
           cd Floating-Sandbox
 
-          echo
-          echo "=== Official Floating Sandbox commit ==="
+          echo "=== Upstream commit ==="
           git rev-parse HEAD
 
       - name: Download PicoJSON
@@ -69,32 +68,22 @@ jobs:
 
           test -s third_party/picojson/picojson.h
 
-          echo "PicoJSON:"
-          ls -lh third_party/picojson/picojson.h
-
       - name: Prepare Emscripten image libraries
         shell: bash
         run: |
           set -e
 
-          echo "Preparing zlib..."
           embuilder build zlib
-
-          echo
-          echo "Preparing libjpeg..."
           embuilder build libjpeg
-
-          echo
-          echo "Preparing libpng..."
           embuilder build libpng
 
-      - name: Inspect repository structure
+      - name: Inspect actual source layout
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "TOP LEVEL DIRECTORIES"
+          echo "DIRECTORIES"
           echo "========================================"
 
           find Floating-Sandbox \
@@ -114,98 +103,70 @@ jobs:
             -print \
             | sort || true
 
-      - name: Locate GameLib
-        shell: bash
-        run: |
-          set -e
+          echo
+          echo "========================================"
+          echo "SOURCES/GAME"
+          echo "========================================"
 
-          echo "Searching for GameLib..."
-
-          GAMELIB_DIR=""
-
-          if [ -d "Floating-Sandbox/GameLib" ]; then
-            GAMELIB_DIR="Floating-Sandbox/GameLib"
-          elif [ -d "Floating-Sandbox/Sources/GameLib" ]; then
-            GAMELIB_DIR="Floating-Sandbox/Sources/GameLib"
-          else
-            while IFS= read -r dir; do
-              GAMELIB_DIR="$dir"
-              break
-            done < <(
-              find Floating-Sandbox \
-                -type d \
-                -name "GameLib" \
-                -print
-            )
-          fi
-
-          if [ -z "$GAMELIB_DIR" ]; then
-            echo "GameLib directory was not found."
-
-            echo
-            echo "Directories containing 'Game':"
-
-            find Floating-Sandbox \
-              -type d \
-              -iname "*game*" \
+          if [ -d "Floating-Sandbox/Sources/Game" ]; then
+            find Floating-Sandbox/Sources/Game \
+              -maxdepth 2 \
+              -type f \
               -print \
               | sort || true
-
-            exit 1
+          else
+            echo "Sources/Game does not exist."
           fi
 
-          echo "GameLib found at:"
-          echo "$GAMELIB_DIR"
+      - name: Inspect Game source dependencies
+        shell: bash
+        run: |
+          set -e
 
-          echo "GAMELIB_DIR=$GAMELIB_DIR" >> "$GITHUB_ENV"
+          if [ -d "Floating-Sandbox/Sources/Game" ]; then
 
-      - name: Inspect GameLib
+            echo "========================================"
+            echo "GAME DEPENDENCIES"
+            echo "========================================"
+
+            grep -RniE \
+              'wxWidgets|wx/|SFML|OpenGL|OpenAL|GL/|pthread|filesystem|SSE2|NEON|Emscripten' \
+              Floating-Sandbox/Sources/Game \
+              --include='*.cpp' \
+              --include='*.h' \
+              --include='CMakeLists.txt' \
+              2>/dev/null \
+              || true
+
+            echo
+            echo "========================================"
+            echo "GAME SOURCE COUNT"
+            echo "========================================"
+
+            find Floating-Sandbox/Sources/Game \
+              -type f \
+              \( -name '*.cpp' -o -name '*.h' \) \
+              -print \
+              | wc -l
+
+          fi
+
+      - name: Inspect top-level build targets
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "GAMELIB"
+          echo "TARGET DEFINITIONS"
           echo "========================================"
 
-          echo "Directory:"
-          echo "$GAMELIB_DIR"
-
-          echo
-          echo "Files:"
-
-          find "$GAMELIB_DIR" \
-            -maxdepth 2 \
-            -type f \
-            -print \
-            | sort || true
-
-          echo
-          echo "Dependency references:"
-
           grep -RniE \
-            'wxWidgets|SFML|OpenGL|OpenAL|zlib|jpeg|png|pthread|SSE2|NEON|filesystem' \
-            "$GAMELIB_DIR" \
-            --include='*.cpp' \
-            --include='*.h' \
-            --include='CMakeLists.txt' \
-            --include='*.cmake' \
-            || true
-
-      - name: Inspect top-level targets
-        shell: bash
-        run: |
-          set -e
-
-          echo "Searching for CMake targets..."
-
-          grep -RniE \
-            'add_library|add_executable|target_link_libraries|target_include_directories' \
+            'add_library|add_executable|target_link_libraries|target_sources' \
             Floating-Sandbox \
             --include='CMakeLists.txt' \
-            || true
+            | sort || true
 
-      - name: Configure with Emscripten
+      - name: Configure native project with Emscripten
         shell: bash
         run: |
           set +e
@@ -213,7 +174,6 @@ jobs:
           rm -rf build-web
           mkdir -p build-web
 
-          echo
           echo "========================================"
           echo "STARTING EMSCRIPTEN CONFIGURATION"
           echo "========================================"
@@ -238,21 +198,17 @@ jobs:
           echo "========================================"
 
           echo
-          echo "========== LAST 300 LINES =========="
+          echo "========== LAST 250 LINES =========="
 
-          if [ -f configure.log ]; then
-            tail -n 300 configure.log || true
-          fi
+          tail -n 250 configure.log || true
 
           echo
           echo "========== IMPORTANT ERRORS =========="
 
-          if [ -f configure.log ]; then
-            grep -n -i \
-              -E "error|failed|not found|could not find|unsupported|fatal" \
-              configure.log \
-              | tail -n 200 || true
-          fi
+          grep -n -i \
+            -E "error|failed|not found|could not find|unsupported|fatal" \
+            configure.log \
+            | tail -n 150 || true
 
           exit $RESULT
 
@@ -262,7 +218,6 @@ jobs:
         run: |
           set +e
 
-          echo
           echo "========================================"
           echo "STARTING EMSCRIPTEN BUILD"
           echo "========================================"
@@ -280,25 +235,21 @@ jobs:
           echo "========================================"
 
           echo
-          echo "========== LAST 300 LINES =========="
+          echo "========== LAST 250 LINES =========="
 
-          if [ -f build.log ]; then
-            tail -n 300 build.log || true
-          fi
+          tail -n 250 build.log || true
 
           echo
           echo "========== IMPORTANT ERRORS =========="
 
-          if [ -f build.log ]; then
-            grep -n -i \
-              -E "error|failed|not found|fatal|undefined reference|unsupported" \
-              build.log \
-              | tail -n 200 || true
-          fi
+          grep -n -i \
+            -E "error|failed|not found|fatal|undefined reference|unsupported" \
+            build.log \
+            | tail -n 150 || true
 
           exit $RESULT
 
-      - name: Search for generated WebAssembly
+      - name: Search for WebAssembly output
         if: always()
         shell: bash
         run: |
