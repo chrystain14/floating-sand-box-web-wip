@@ -5,7 +5,6 @@
 #ifdef __EMSCRIPTEN__
 
 #include <emscripten/html5_webgl.h>
-#include <emscripten/threading.h>
 
 #include <atomic>
 #include <string>
@@ -84,8 +83,6 @@ public:
 
 private:
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE mContext;
-
-    friend class wxGLCanvas;
 };
 
 class wxGLCanvas : public wxPanel
@@ -167,6 +164,11 @@ public:
         return mContext;
     }
 
+    char const * GetWasmCanvasSelector() const
+    {
+        return mCanvasSelector.c_str();
+    }
+
 private:
     bool SetCurrentContext(EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context)
     {
@@ -212,7 +214,7 @@ inline bool wxGLContext::SetCurrent(wxGLCanvas & canvas) const
     wxPoint const screenPos = canvas.GetScreenPosition();
     wxSize const size = canvas.GetSize();
     floating_sandbox_wasm_gl::SyncCanvasElement(
-        "",
+        canvas.GetWasmCanvasSelector(),
         screenPos.x,
         screenPos.y,
         size.GetWidth(),
