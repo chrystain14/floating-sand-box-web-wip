@@ -17,48 +17,23 @@ with tempfile.TemporaryDirectory(prefix="floating-sandbox-wasm-") as tmp:
 
 SFML_ROOT = Path("sfml-src")
 
-# SFML 2.5.1's public Config.hpp does not recognize Emscripten and falls into
-# its unsupported-UNIX #error. Apply the fix after all helper preparation so it
-# cannot be overwritten by another compatibility pass.
+# SFML 2.5.1's public Config.hpp does not recognize Emscripten.  Emscripten
+# 3.1.12 does not reliably define __unix__, so the Emscripten branch MUST come
+# before SFML's __unix__ test rather than being nested inside it.
 sfml_config = SFML_ROOT / "include/SFML/Config.hpp"
 text = sfml_config.read_text(encoding="utf-8")
-old = '''    #else
-
-        // Unsupported UNIX system
-        #error This UNIX operating system is not supported by SFML library
-
-    #endif'''
-new = '''    #else
-
-    #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)
-
-        // Emscripten
-        #define SFML_SYSTEM_EMSCRIPTEN
-
-    #else
-
-        // Unsupported UNIX system
-        #error This UNIX operating system is not supported by SFML library
-
-    #endif
-
-    #endif'''
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in text:
+    old = '''#elif defined(__APPLE__) && defined(__MACH__)'''
+    new = '''#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)\n\n    // Emscripten / WebAssembly\n    #define SFML_SYSTEM_EMSCRIPTEN\n\n#elif defined(__APPLE__) && defined(__MACH__)'''
     if old not in text:
-        raise RuntimeError("Could not locate SFML unsupported UNIX branch")
+        raise RuntimeError("Could not locate SFML platform-detection branch")
     sfml_config.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 # SFML 2.5.1 has no misc install directory case for Emscripten.
 sfml_cmake = SFML_ROOT / "CMakeLists.txt"
 text = sfml_cmake.read_text(encoding="utf-8")
-old = '''elseif(SFML_OS_ANDROID)
-    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)
-endif()'''
-new = '''elseif(SFML_OS_ANDROID)
-    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)
-elseif(SFML_OS_EMSCRIPTEN)
-    set(DEFAULT_INSTALL_MISC_DIR .)
-endif()'''
+old = '''elseif(SFML_OS_ANDROID)\n    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)\nendif()'''
+new = '''elseif(SFML_OS_ANDROID)\n    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)\nelseif(SFML_OS_EMSCRIPTEN)\n    set(DEFAULT_INSTALL_MISC_DIR .)\nendif()'''
 if "elseif(SFML_OS_EMSCRIPTEN)" not in text:
     if old not in text:
         raise RuntimeError("Could not locate SFML Android install-directory branch")
@@ -81,10 +56,12 @@ for path in audio_root.rglob("*"):
     if updated != source:
         path.write_text(updated, encoding="utf-8")
 
-# Hard validation: the two critical Emscripten fixes must be present in the
+# Hard validation: the critical Emscripten platform fix must be present in the
 # source that will actually be compiled.
 patched = sfml_config.read_text(encoding="utf-8")
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in patched:
     raise RuntimeError("SFML Config.hpp Emscripten fix is missing")
+if "#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)" not in patched:
+    raise RuntimeError("SFML Emscripten branch is not before the __unix__ detector")
 
 print("WASM compatibility preparation completed successfully")
