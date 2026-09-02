@@ -6,6 +6,7 @@ immediately before that compatibility script and force-normalizes SFML's
 platform detection for the pinned Emscripten toolchain.
 """
 from pathlib import Path
+import os
 
 config_h = Path("sfml-src/include/SFML/Config.hpp")
 if config_h.exists():
@@ -22,3 +23,18 @@ if config_h.exists():
         print("sitecustomize: forced SFML Emscripten platform branch")
     elif "#define SFML_SYSTEM_EMSCRIPTEN" in text:
         print("sitecustomize: SFML Emscripten platform branch already present")
+
+# SFML 2.5.1's ALCheck headers include legacy flat OpenAL names (<al.h>,
+# <alc.h>), while Emscripten exposes the modern <AL/al.h> and <AL/alc.h>.
+# Add local forwarding headers so the old SFML source resolves cleanly.
+sysroot = Path(os.environ.get("EM_SYSROOT", ""))
+if sysroot:
+    for source_name, target in (
+        ("al.h", Path("sfml-src/include/al.h")),
+        ("alc.h", Path("sfml-src/include/alc.h")),
+    ):
+        source = sysroot / "include" / "AL" / source_name
+        if source.exists() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(source.resolve())
+            print(f"sitecustomize: added legacy OpenAL forwarding header {target}")
