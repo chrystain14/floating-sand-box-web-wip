@@ -31,7 +31,16 @@ if "#define SFML_SYSTEM_EMSCRIPTEN" not in text:
     if marker not in text:
         raise RuntimeError("Could not locate SFML __unix__ platform marker")
     text = text.replace(marker, insert, 1)
-    config_h.write_text(text, encoding="utf-8")
+
+# Some SFML 2.5.1 compiler paths still enter the nested UNIX detector under
+# Emscripten. Patch that fallback explicitly so the browser build cannot hit
+# SFML's unsupported-UNIX error even when the predefined macro is different.
+unix_fallback = """        // Unsupported UNIX system\n        #error This UNIX operating system is not supported by SFML library"""
+emscripten_fallback = """        // Emscripten / WebAssembly\n        #define SFML_SYSTEM_EMSCRIPTEN"""
+if unix_fallback in text and "#define SFML_SYSTEM_EMSCRIPTEN" in text:
+    text = text.replace(unix_fallback, emscripten_fallback, 1)
+
+config_h.write_text(text, encoding="utf-8")
 
 # Belt-and-suspenders: force the Emscripten macro through SFML's own CMake
 # project too, so the header branch above is selected regardless of compiler
@@ -51,6 +60,8 @@ if "#define SFML_SYSTEM_EMSCRIPTEN" not in final_text:
     raise RuntimeError("SFML Emscripten platform define was not applied")
 if final_text.index("#define SFML_SYSTEM_EMSCRIPTEN") > final_text.index("#elif defined(__unix__)"):
     raise RuntimeError("SFML Emscripten platform branch was inserted after __unix__")
+if "This UNIX operating system is not supported by SFML library" in final_text:
+    raise RuntimeError("SFML UNIX fallback error was not removed for Emscripten")
 if "add_definitions(-D__EMSCRIPTEN__)" not in sfml_cmake.read_text(encoding="utf-8"):
     raise RuntimeError("SFML CMake Emscripten definition was not applied")
 
