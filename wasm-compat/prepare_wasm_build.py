@@ -21,17 +21,37 @@ with tempfile.TemporaryDirectory(prefix="floating-sandbox-wasm-") as tmp:
 config_h = Path("sfml-src/include/SFML/Config.hpp")
 text = config_h.read_text(encoding="utf-8")
 marker = "#elif defined(__unix__)"
-insert = """#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)\n\n    // Emscripten / WebAssembly\n    #define SFML_SYSTEM_EMSCRIPTEN\n\n#elif defined(__unix__)"""
+insert = """#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)
+
+    // Emscripten / WebAssembly
+    #define SFML_SYSTEM_EMSCRIPTEN
+
+#elif defined(__unix__)"""
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in text:
     if marker not in text:
         raise RuntimeError("Could not locate SFML __unix__ platform marker")
     text = text.replace(marker, insert, 1)
     config_h.write_text(text, encoding="utf-8")
 
+# Belt-and-suspenders: force the Emscripten macro through SFML's own CMake
+# project too, so the header branch above is selected regardless of compiler
+# predefined-macro behavior in the pinned Emscripten toolchain.
+sfml_cmake = Path("sfml-src/CMakeLists.txt")
+cmake_text = sfml_cmake.read_text(encoding="utf-8")
+cmake_marker = "project(SFML)\n"
+cmake_insert = "project(SFML)\nadd_definitions(-D__EMSCRIPTEN__)\n"
+if "add_definitions(-D__EMSCRIPTEN__)" not in cmake_text:
+    if cmake_marker not in cmake_text:
+        raise RuntimeError("Could not locate SFML project() marker")
+    cmake_text = cmake_text.replace(cmake_marker, cmake_insert, 1)
+    sfml_cmake.write_text(cmake_text, encoding="utf-8")
+
 final_text = config_h.read_text(encoding="utf-8")
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in final_text:
     raise RuntimeError("SFML Emscripten platform define was not applied")
 if final_text.index("#define SFML_SYSTEM_EMSCRIPTEN") > final_text.index("#elif defined(__unix__)"):
     raise RuntimeError("SFML Emscripten platform branch was inserted after __unix__")
+if "add_definitions(-D__EMSCRIPTEN__)" not in sfml_cmake.read_text(encoding="utf-8"):
+    raise RuntimeError("SFML CMake Emscripten definition was not applied")
 
-print("SFML Emscripten platform header patch verified")
+print("SFML Emscripten platform header and CMake patches verified")
