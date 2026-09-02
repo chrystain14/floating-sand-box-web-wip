@@ -70,7 +70,7 @@ platform_block = r'''#if defined(_WIN32)
 
     #elif defined(__linux__)
 
-         // Linux
+        // Linux
         #define SFML_SYSTEM_LINUX
 
     #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
@@ -82,6 +82,11 @@ platform_block = r'''#if defined(_WIN32)
 
         // OpenBSD
         #define SFML_SYSTEM_OPENBSD
+
+    #elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)
+
+        // Emscripten may also define __unix__; keep it out of the Linux path.
+        #define SFML_SYSTEM_EMSCRIPTEN
 
     #else
 
@@ -120,6 +125,8 @@ if branch_pos < 0 or unix_pos < 0 or branch_pos >= unix_pos:
     raise RuntimeError("SFML Emscripten branch is not before the UNIX branch")
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in final_text:
     raise RuntimeError("SFML Emscripten platform define was not applied")
+if "#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)" not in final_text[unix_pos:]:
+    raise RuntimeError("SFML UNIX fallback Emscripten branch was not applied")
 if "This UNIX operating system is not supported by SFML library" not in final_text:
     raise RuntimeError("SFML Config.hpp unexpectedly lost its UNIX guard")
 if "add_definitions(-D__EMSCRIPTEN__)" not in sfml_cmake.read_text(encoding="utf-8"):
