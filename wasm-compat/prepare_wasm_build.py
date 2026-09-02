@@ -40,8 +40,7 @@ platform_block = r'''#if defined(_WIN32)
 
 #elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)
 
-    // Emscripten / WebAssembly. SFML 2.5.1 has no dedicated backend, so use
-    // the Unix/Linux code paths that are compatible with Emscripten's libc.
+    // Emscripten / WebAssembly. Reuse SFML's Unix implementation families.
     #define SFML_SYSTEM_EMSCRIPTEN
     #define SFML_SYSTEM_UNIX
     #define SFML_SYSTEM_LINUX
@@ -69,16 +68,39 @@ platform_block = r'''#if defined(_WIN32)
 
 
 '''
+# Replace the entire platform-detection block, then verify the actual file.
 config_h.write_text(text[:start] + platform_block + text[end:], encoding="utf-8")
 
+# Extra deterministic guard: if a future upstream/template change causes the
+# block replacement above to miss, explicitly inject the Emscripten branch.
 final_text = config_h.read_text(encoding="utf-8")
-branch_pos = final_text.find("#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)")
-unix_pos = final_text.find("#elif defined(__unix__)")
+ems = "#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)"
+unix = "#elif defined(__unix__)"
+if ems not in final_text:
+    marker = unix
+    replacement = (
+        "#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)\n\n"
+        "    // Emscripten / WebAssembly\n"
+        "    #define SFML_SYSTEM_EMSCRIPTEN\n"
+        "    #define SFML_SYSTEM_UNIX\n"
+        "    #define SFML_SYSTEM_LINUX\n\n"
+        + unix
+    )
+    final_text = final_text.replace(marker, replacement, 1)
+    config_h.write_text(final_text, encoding="utf-8")
+    final_text = config_h.read_text(encoding="utf-8")
+
+branch_pos = final_text.find(ems)
+unix_pos = final_text.find(unix, branch_pos + 1)
 if branch_pos < 0 or unix_pos < 0 or branch_pos >= unix_pos:
     raise RuntimeError("SFML Emscripten platform branch is not before the UNIX branch")
-if "#define SFML_SYSTEM_EMSCRIPTEN" not in final_text[branch_pos:unix_pos]:
+branch_end = final_text.find("#elif defined(__unix__)", branch_pos + 1)
+branch_text = final_text[branch_pos:branch_end]
+if "#define SFML_SYSTEM_EMSCRIPTEN" not in branch_text:
     raise RuntimeError("SFML_SYSTEM_EMSCRIPTEN was not applied")
-if "#define SFML_SYSTEM_LINUX" not in final_text[branch_pos:unix_pos]:
+if "#define SFML_SYSTEM_UNIX" not in branch_text:
+    raise RuntimeError("SFML_SYSTEM_UNIX was not applied")
+if "#define SFML_SYSTEM_LINUX" not in branch_text:
     raise RuntimeError("SFML_SYSTEM_LINUX was not applied")
 if "This UNIX operating system is not supported by SFML library" not in final_text:
     raise RuntimeError("SFML UNIX guard unexpectedly disappeared")
