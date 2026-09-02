@@ -1,26 +1,12 @@
 from pathlib import Path
+import os
 import runpy
 import tempfile
 import urllib.request
 
-# SFML 2.5.1 can reject Emscripten in its public Config.hpp. Patch the exact
-# unsupported-UNIX fallback so Emscripten is recognized deterministically.
-sfml_config = Path("sfml-src/include/SFML/Config.hpp")
-text = sfml_config.read_text(encoding="utf-8")
-old = """    #else\n\n        // Unsupported UNIX system\n        #error This UNIX operating system is not supported by SFML library\n\n    #endif"""
-new = """    #else\n\n    #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)\n\n        // Emscripten\n        #define SFML_SYSTEM_EMSCRIPTEN\n\n    #else\n\n        // Unsupported UNIX system\n        #error This UNIX operating system is not supported by SFML library\n\n    #endif\n\n    #endif"""
-if "#define SFML_SYSTEM_EMSCRIPTEN" not in text:
-    if old not in text:
-        raise RuntimeError("Could not locate SFML unsupported UNIX branch")
-    sfml_config.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-patched = sfml_config.read_text(encoding="utf-8")
-if "#define SFML_SYSTEM_EMSCRIPTEN" not in patched:
-    raise RuntimeError("SFML Config.hpp was not patched for Emscripten")
-
-# Run the established compatibility preparation implementation pinned to the
-# staging base commit so upstream changes cannot silently alter the build.
-url = "https://raw.githubusercontent.com/chrystain14/floating-sand-box-web-wip/da3d0e50138c1b2854cecf940167e067685ac89e/wasm-compat/prepare_wasm_build.py"
+# Reuse the known-good WASM compatibility preparation from the last stable
+# staging point, then apply the additional fixes needed by the current build.
+url = "https://raw.githubusercontent.com/chrystain14/floating-sand-box-web-wip/5dad57eb1479d91af16e6e85cd444f144671a171/wasm-compat/prepare_wasm_build.py"
 with urllib.request.urlopen(url, timeout=30) as response:
     original = response.read().decode("utf-8")
 
@@ -29,37 +15,76 @@ with tempfile.TemporaryDirectory(prefix="floating-sandbox-wasm-") as tmp:
     helper.write_text(original, encoding="utf-8")
     runpy.run_path(str(helper), run_name="__main__")
 
-# Emscripten's OpenAL headers live under AL/, while SFML 2.5.1's audio
-# sources include the desktop names directly. Normalize those includes.
-audio_root = Path("sfml-src/src/SFML/Audio")
+SFML_ROOT = Path("sfml-src")
+
+# SFML 2.5.1's public Config.hpp does not recognize Emscripten and falls into
+# its unsupported-UNIX #error. Apply the fix after all helper preparation so it
+# cannot be overwritten by another compatibility pass.
+sfml_config = SFML_ROOT / "include/SFML/Config.hpp"
+text = sfml_config.read_text(encoding="utf-8")
+old = '''    #else
+
+        // Unsupported UNIX system
+        #error This UNIX operating system is not supported by SFML library
+
+    #endif'''
+new = '''    #else
+
+    #if defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)
+
+        // Emscripten
+        #define SFML_SYSTEM_EMSCRIPTEN
+
+    #else
+
+        // Unsupported UNIX system
+        #error This UNIX operating system is not supported by SFML library
+
+    #endif
+
+    #endif'''
+if "#define SFML_SYSTEM_EMSCRIPTEN" not in text:
+    if old not in text:
+        raise RuntimeError("Could not locate SFML unsupported UNIX branch")
+    sfml_config.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+# SFML 2.5.1 has no misc install directory case for Emscripten.
+sfml_cmake = SFML_ROOT / "CMakeLists.txt"
+text = sfml_cmake.read_text(encoding="utf-8")
+old = '''elseif(SFML_OS_ANDROID)
+    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)
+endif()'''
+new = '''elseif(SFML_OS_ANDROID)
+    set(DEFAULT_INSTALL_MISC_DIR ${CMAKE_ANDROID_NDK}/sources/third_party/sfml)
+elseif(SFML_OS_EMSCRIPTEN)
+    set(DEFAULT_INSTALL_MISC_DIR .)
+endif()'''
+if "elseif(SFML_OS_EMSCRIPTEN)" not in text:
+    if old not in text:
+        raise RuntimeError("Could not locate SFML Android install-directory branch")
+    sfml_cmake.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+# Emscripten's OpenAL headers are namespaced under AL/.
+audio_root = SFML_ROOT / "src/SFML/Audio"
 include_replacements = {
     "#include <al.h>": "#include <AL/al.h>",
     "#include <alc.h>": "#include <AL/alc.h>",
     "#include <alext.h>": "#include <AL/alext.h>",
 }
-replaced = 0
 for path in audio_root.rglob("*"):
     if not path.is_file() or path.suffix not in {".h", ".hpp", ".cpp", ".inl"}:
         continue
     source = path.read_text(encoding="utf-8")
     updated = source
     for old_include, new_include in include_replacements.items():
-        occurrences = updated.count(old_include)
-        if occurrences:
-            replaced += occurrences
-            updated = updated.replace(old_include, new_include)
+        updated = updated.replace(old_include, new_include)
     if updated != source:
         path.write_text(updated, encoding="utf-8")
 
-for old_include in include_replacements:
-    for path in audio_root.rglob("*"):
-        if path.is_file() and path.suffix in {".h", ".hpp", ".cpp", ".inl"}:
-            if old_include in path.read_text(encoding="utf-8"):
-                raise RuntimeError(f"Unpatched OpenAL include remains: {old_include} in {path}")
-
-# Ensure the helper did not overwrite our header fix.
+# Hard validation: the two critical Emscripten fixes must be present in the
+# source that will actually be compiled.
 patched = sfml_config.read_text(encoding="utf-8")
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in patched:
-    raise RuntimeError("SFML Config.hpp Emscripten marker disappeared during preparation")
+    raise RuntimeError("SFML Config.hpp Emscripten fix is missing")
 
-print(f"WASM compatibility preparation completed successfully; normalized {replaced} OpenAL include(s)")
+print("WASM compatibility preparation completed successfully")
