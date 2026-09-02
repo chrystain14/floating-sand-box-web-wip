@@ -29,9 +29,37 @@ with tempfile.TemporaryDirectory(prefix="floating-sandbox-wasm-") as tmp:
     helper.write_text(original, encoding="utf-8")
     runpy.run_path(str(helper), run_name="__main__")
 
+# Emscripten's OpenAL headers live under AL/, while SFML 2.5.1's audio
+# sources include the desktop names directly. Normalize those includes.
+audio_root = Path("sfml-src/src/SFML/Audio")
+include_replacements = {
+    "#include <al.h>": "#include <AL/al.h>",
+    "#include <alc.h>": "#include <AL/alc.h>",
+    "#include <alext.h>": "#include <AL/alext.h>",
+}
+replaced = 0
+for path in audio_root.rglob("*"):
+    if not path.is_file() or path.suffix not in {".h", ".hpp", ".cpp", ".inl"}:
+        continue
+    source = path.read_text(encoding="utf-8")
+    updated = source
+    for old_include, new_include in include_replacements.items():
+        occurrences = updated.count(old_include)
+        if occurrences:
+            replaced += occurrences
+            updated = updated.replace(old_include, new_include)
+    if updated != source:
+        path.write_text(updated, encoding="utf-8")
+
+for old_include in include_replacements:
+    for path in audio_root.rglob("*"):
+        if path.is_file() and path.suffix in {".h", ".hpp", ".cpp", ".inl"}:
+            if old_include in path.read_text(encoding="utf-8"):
+                raise RuntimeError(f"Unpatched OpenAL include remains: {old_include} in {path}")
+
 # Ensure the helper did not overwrite our header fix.
 patched = sfml_config.read_text(encoding="utf-8")
 if "#define SFML_SYSTEM_EMSCRIPTEN" not in patched:
     raise RuntimeError("SFML Config.hpp Emscripten marker disappeared during preparation")
 
-print("WASM compatibility preparation completed successfully")
+print(f"WASM compatibility preparation completed successfully; normalized {replaced} OpenAL include(s)")
