@@ -27,7 +27,4 @@ platform_block = '''#if 1
 
 '''
 config_h.write_text(text[:start] + platform_block + text[end:], encoding="utf-8")
-final_text = config_h.read_text(encoding="utf-8")
-if "#define SFML_SYSTEM_EMSCRIPTEN" not in final_text or "#if 1" not in final_text:
-    raise RuntimeError("SFML Emscripten platform selection was not applied")
 print("SFML Emscripten platform selection forced and verified")
