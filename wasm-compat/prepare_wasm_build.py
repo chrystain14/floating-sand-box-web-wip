@@ -1,1 +1,33 @@
-# placeholder
+from pathlib import Path
+import runpy
+base = Path(__file__).with_name("prepare_wasm_build_base.py")
+runpy.run_path(str(base), run_name="__main__")
+config_h = Path("sfml-src/include/SFML/Config.hpp")
+text = config_h.read_text(encoding="utf-8")
+start_marker = "#if defined(_WIN32)"
+end_marker = "////////////////////////////////////////////////////////////\n// Define a portable debug macro"
+start = text.find(start_marker)
+end = text.find(end_marker, start)
+if start < 0 or end < 0:
+    raise RuntimeError("Could not locate SFML Config.hpp platform-detection block")
+platform_block = '''#if 1
+    #define SFML_SYSTEM_EMSCRIPTEN
+#else
+    #if defined(_WIN32)
+        #define SFML_SYSTEM_WINDOWS
+    #elif defined(__APPLE__) && defined(__MACH__)
+        #define SFML_SYSTEM_MACOS
+    #elif defined(__unix__)
+        #define SFML_SYSTEM_UNIX
+    #else
+        #error This operating system is not supported by SFML library
+    #endif
+#endif
+
+
+'''
+config_h.write_text(text[:start] + platform_block + text[end:], encoding="utf-8")
+final_text = config_h.read_text(encoding="utf-8")
+if "#define SFML_SYSTEM_EMSCRIPTEN" not in final_text or "#if 1" not in final_text:
+    raise RuntimeError("SFML Emscripten platform selection was not applied")
+print("SFML Emscripten platform selection forced and verified")
