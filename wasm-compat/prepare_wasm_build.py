@@ -3,8 +3,8 @@ import runpy
 import tempfile
 import urllib.request
 
-# Run the complete WebGL2 compatibility pass from the last diagnostic revision.
-REV = "da3d0e50138c1b2854cecf940167e067685ac89e"
+# Run the complete WebGL2 compatibility pass from the last complete revision.
+REV = "706e49c3b0f01d4a635a9e940d6c990dbdf70e4d"
 URL = f"https://raw.githubusercontent.com/chrystain14/floating-sand-box-web-wip/{REV}/wasm-compat/prepare_wasm_build.py"
 
 with urllib.request.urlopen(URL, timeout=30) as response:
