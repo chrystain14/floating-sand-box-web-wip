@@ -32,6 +32,7 @@ jobs:
           em++ --version
           command -v emcmake
           emcmake cmake --version
+          cmake --version
           echo "EM_SYSROOT=$EMSDK/upstream/emscripten/cache/sysroot" >> "$GITHUB_ENV"
 
       - name: Checkout upstream Floating Sandbox
@@ -56,7 +57,6 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DZLIB_BUILD_TESTING=OFF
           cmake --build zlib-build --target zlibstatic --parallel 2
-          test -f zlib-build/libz.a
           cmake --install zlib-build
           mkdir -p zlib-install/include zlib-install/lib
           cp zlib-src/zlib.h zlib-install/include/zlib.h
@@ -151,14 +151,10 @@ jobs:
           test -f "$EM_SYSROOT/include/AL/al.h"
           test -f "$EM_SYSROOT/include/vorbis/vorbisfile.h"
 
-      - name: Build SFML 2.5.1 for WebAssembly
+      - name: Build SFML 2.6.x-EMCC for WebAssembly
         run: |
           set -euxo pipefail
-          git clone --depth 1 --branch 2.5.1 https://github.com/SFML/SFML.git sfml-src
-          export CXXFLAGS="-fexceptions -pthread"
-          export LDFLAGS="-pthread -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
-          python3 -m py_compile wasm-compat/prepare_wasm_build.py
-          python3 wasm-compat/prepare_wasm_build.py
+          git clone --depth 1 --branch 2.6.x-EMCC https://github.com/Zombieschannel/SFML.git sfml-src
           emcmake cmake -S sfml-src -B sfml-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/sfml-install" \
@@ -169,7 +165,7 @@ jobs:
             -DSFML_BUILD_GRAPHICS=OFF \
             -DSFML_BUILD_AUDIO=ON \
             -DSFML_BUILD_NETWORK=ON \
-            -DSFML_USE_SYSTEM_DEPS=OFF 2>&1 | tee "$GITHUB_WORKSPACE/sfml-configure.log"
+            -DSFML_BUILD_TEST_SUITE=OFF
           cmake --build sfml-build --parallel 2 2>&1 | tee "$GITHUB_WORKSPACE/sfml-build.log"
           cmake --install sfml-build 2>&1 | tee "$GITHUB_WORKSPACE/sfml-install.log"
           test -f sfml-install/include/SFML/Audio.hpp
@@ -224,7 +220,7 @@ jobs:
             grep -E 'PICOJSON|ZLIB|JPEG|PNG|wxWidgets|SFML|OPENGL|GTEST|CMAKE_CXX_COMPILER' wasm-port-build/CMakeCache.txt || true
           fi
           echo '=== SFML diagnostic logs ==='
-          for f in sfml-configure.log sfml-build.log sfml-install.log; do
+          for f in sfml-build.log sfml-install.log; do
             if [ -f "$f" ]; then
               echo "--- $f (tail 250) ---"
               tail -n 250 "$f" || true
@@ -250,7 +246,6 @@ jobs:
             wasm-port-build/**/*.data
             wasm-port-build/CMakeCache.txt
             wasm-port-build/CMakeFiles/**/*.log
-            sfml-configure.log
             sfml-build.log
             sfml-install.log
             sfml-build/CMakeFiles/**/*.log
