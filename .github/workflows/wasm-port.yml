@@ -113,7 +113,11 @@ jobs:
         run: |
           set -euxo pipefail
           git clone --depth 1 --branch 2.6.x-EMCC https://github.com/Zombieschannel/SFML.git sfml-src
+          export CFLAGS="-D__EMSCRIPTEN__"
+          export CXXFLAGS="-D__EMSCRIPTEN__ -fexceptions -pthread"
+          export LDFLAGS="-pthread -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
           python3 wasm-compat/prepare_wasm_build.py
+          printf '#include <SFML/Config.hpp>\n' | em++ -x c++ -E -dM -Isfml-src/include - | grep 'SFML_SYSTEM_EMSCRIPTEN'
           python3 - <<'PY'
           from pathlib import Path
           p = Path('sfml-src/cmake/Config.cmake')
