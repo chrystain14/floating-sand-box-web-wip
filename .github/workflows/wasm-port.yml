@@ -116,8 +116,6 @@ jobs:
           export CFLAGS="-D__EMSCRIPTEN__"
           export CXXFLAGS="-D__EMSCRIPTEN__ -fexceptions -pthread"
           export LDFLAGS="-pthread -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
-          python3 wasm-compat/prepare_wasm_build.py
-          printf '#include <SFML/Config.hpp>\n' | em++ -x c++ -E -dM -Isfml-src/include - | grep 'SFML_SYSTEM_EMSCRIPTEN'
           python3 - <<'PY'
           from pathlib import Path
           p = Path('sfml-src/cmake/Config.cmake')
@@ -127,11 +125,23 @@ jobs:
           s = s.replace('--use-port=vorbis', '-sUSE_VORBIS=1')
           s = s.replace('-SMINIFY_HTML=1', '-sMINIFY_HTML=1')
           p.write_text(s, encoding='utf-8')
+          assert 'set(SFML_OS_EMSCRIPTEN 1)' in s
           assert '--use-port=' not in s
           assert '-sUSE_OGG=1' in s
           assert '-sUSE_VORBIS=1' in s
+          print('SFML Emscripten CMake configuration verified')
           PY
-          emcmake cmake -S sfml-src -B sfml-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/sfml-install" -DBUILD_SHARED_LIBS=OFF -DSFML_BUILD_EXAMPLES=OFF -DSFML_BUILD_DOC=OFF -DSFML_BUILD_WINDOW=OFF -DSFML_BUILD_GRAPHICS=OFF -DSFML_BUILD_AUDIO=ON -DSFML_BUILD_NETWORK=ON -DSFML_BUILD_TEST_SUITE=OFF
+          emcmake cmake -S sfml-src -B sfml-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/sfml-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DSFML_BUILD_EXAMPLES=OFF \
+            -DSFML_BUILD_DOC=OFF \
+            -DSFML_BUILD_WINDOW=OFF \
+            -DSFML_BUILD_GRAPHICS=OFF \
+            -DSFML_BUILD_AUDIO=ON \
+            -DSFML_BUILD_NETWORK=ON \
+            -DSFML_BUILD_TEST_SUITE=OFF
           cmake --build sfml-build --parallel 2 2>&1 | tee sfml-build.log
           cmake --install sfml-build 2>&1 | tee sfml-install.log
           test -f sfml-install/include/SFML/Audio.hpp
@@ -144,13 +154,41 @@ jobs:
           set -eux
           git clone --depth 1 --branch release-1.12.1 https://github.com/google/googletest.git third-party/googletest
 
+      - name: Prepare Floating Sandbox WebAssembly compatibility
+        run: |
+          set -eux
+          python3 -m py_compile wasm-compat/prepare_floating_sandbox.py
+          python3 wasm-compat/prepare_floating_sandbox.py
+
       - name: Configure Floating Sandbox
         run: |
           set -eux
           rm -rf wasm-port-build
           export CXXFLAGS="$(wx-config --cxxflags) -I$GITHUB_WORKSPACE/wasm-compat -fexceptions -pthread -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OGG=1 -sUSE_VORBIS=1"
           export LDFLAGS="-L$GITHUB_WORKSPACE/zlib-install/lib -L$GITHUB_WORKSPACE/png-install/lib -L$GITHUB_WORKSPACE/jpeg-install/lib -L$GITHUB_WORKSPACE/sfml-install/lib -fexceptions -pthread -sDISABLE_EXCEPTION_CATCHING=0 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -lopenal"
-          emcmake cmake -S upstream-floating-sandbox -B wasm-port-build -DCMAKE_BUILD_TYPE=Release -DFS_BUILD_BENCHMARKS=OFF -DFS_USE_STATIC_LIBS=ON -DGTEST_DIR="$GITHUB_WORKSPACE/third-party/googletest" -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" -DJPEG_INCLUDE_DIR="$GITHUB_WORKSPACE/jpeg-install/include" -DJPEG_LIBRARY="$GITHUB_WORKSPACE/jpeg-install/lib/libjpeg.a" -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" -DwxWidgets_ROOT="$GITHUB_WORKSPACE/wxwidgets-install" -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" -DwxWidgets_USE_DEBUG=OFF -DwxWidgets_USE_UNICODE=ON -DwxWidgets_USE_STATIC=ON -DSFML_ROOT="$GITHUB_WORKSPACE/sfml-install"
+          emcmake cmake -S upstream-floating-sandbox -B wasm-port-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFS_BUILD_BENCHMARKS=OFF \
+            -DFS_USE_STATIC_LIBS=ON \
+            -DGTEST_DIR="$GITHUB_WORKSPACE/third-party/googletest" \
+            -DPICOJSON_INCLUDE_DIRS="$GITHUB_WORKSPACE/third-party/picojson/include" \
+            -DZLIB_ROOT="$GITHUB_WORKSPACE/zlib-install" \
+            -DZLIB_INCLUDE_DIR="$GITHUB_WORKSPACE/zlib-install/include" \
+            -DZLIB_LIBRARY="$GITHUB_WORKSPACE/zlib-install/lib/libz.a" \
+            -DJPEG_INCLUDE_DIR="$GITHUB_WORKSPACE/jpeg-install/include" \
+            -DJPEG_LIBRARY="$GITHUB_WORKSPACE/jpeg-install/lib/libjpeg.a" \
+            -DPNG_PNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
+            -DPNG_INCLUDE_DIR="$GITHUB_WORKSPACE/png-install/include" \
+            -DPNG_LIBRARY="$GITHUB_WORKSPACE/png-install/lib/libpng16.a" \
+            -DwxWidgets_ROOT="$GITHUB_WORKSPACE/wxwidgets-install" \
+            -DwxWidgets_CONFIG_EXECUTABLE="$WX_CONFIG" \
+            -DwxWidgets_USE_DEBUG=OFF \
+            -DwxWidgets_USE_UNICODE=ON \
+            -DwxWidgets_USE_STATIC=ON \
+            -DSFML_ROOT="$GITHUB_WORKSPACE/sfml-install" \
+            -DSFML_DIR="$GITHUB_WORKSPACE/sfml-install/lib/cmake/SFML" \
+            -DSFML_STATIC_LIBRARIES=TRUE \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/sfml-install"
 
       - name: Build Floating Sandbox
         run: |
