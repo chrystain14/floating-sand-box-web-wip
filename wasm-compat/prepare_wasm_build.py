@@ -3,19 +3,24 @@ import os
 import re
 import runpy
 
-# Keep Emscripten's platform macro explicit for every SFML compile.
+# Keep Emscripten's platform macros explicit for every SFML compile.
 for var in ("CFLAGS", "CXXFLAGS"):
     current = os.environ.get(var, "")
+    additions = []
     if "-D__EMSCRIPTEN__" not in current:
-        os.environ[var] = (current + " -D__EMSCRIPTEN__").strip()
+        additions.append("-D__EMSCRIPTEN__")
+    if "-DSFML_SYSTEM_EMSCRIPTEN" not in current:
+        additions.append("-DSFML_SYSTEM_EMSCRIPTEN")
+    if additions:
+        os.environ[var] = (current + " " + " ".join(additions)).strip()
 
 # Reuse the complete compatibility pass already established on the staging
 # branch, including the wxWidgets/OpenGL/SFML dependency shims.
 runpy.run_path(str(Path(__file__).with_name("prepare_wasm_build_base.py")), run_name="__main__")
 
 # SFML 2.5.1's Config.hpp platform block is the critical part. Replace the
-# entire block instead of relying on fragile single-line insertion. Emscripten
-# MUST be checked before __unix__, because Clang defines both.
+# entire block instead of relying on fragile single-line insertion. Force the
+# Emscripten branch to win even when the compiler also defines __unix__.
 config_h = Path("sfml-src/include/SFML/Config.hpp")
 text = config_h.read_text(encoding="utf-8")
 start_marker = "#if defined(_WIN32)"
@@ -25,7 +30,80 @@ end = text.find(end_marker, start)
 if start < 0 or end < 0:
     raise RuntimeError("Could not locate SFML Config.hpp platform-detection block")
 
-platform_block = '''#if defined(_WIN32)\n\n    // Windows\n    #define SFML_SYSTEM_WINDOWS\n    #ifndef NOMINMAX\n        #define NOMINMAX\n    #endif\n\n#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)\n\n    // Emscripten / WebAssembly\n    #define SFML_SYSTEM_EMSCRIPTEN\n\n#elif defined(__APPLE__) && defined(__MACH__)\n\n    // Apple platform, see which one it is\n    #include "TargetConditionals.h"\n\n    #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR\n\n        // iOS\n        #define SFML_SYSTEM_IOS\n\n    #elif TARGET_OS_MAC\n\n        // MacOS\n        #define SFML_SYSTEM_MACOS\n\n    #else\n\n        // Unsupported Apple system\n        #error This Apple operating system is not supported by SFML library\n\n    #endif\n\n#elif defined(__unix__)\n\n    // UNIX system, see which one it is\n    #if defined(__ANDROID__)\n\n        // Android\n        #define SFML_SYSTEM_ANDROID\n\n    #elif defined(__linux__)\n\n        // Linux\n        #define SFML_SYSTEM_LINUX\n\n    #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)\n\n        // FreeBSD\n        #define SFML_SYSTEM_FREEBSD\n\n    #elif defined(__OpenBSD__)\n\n        // OpenBSD\n        #define SFML_SYSTEM_OPENBSD\n\n    #else\n\n        // Unsupported UNIX system\n        #error This UNIX operating system is not supported by SFML library\n\n    #endif\n\n#else\n\n    // Unsupported system\n    #error This operating system is not supported by SFML library\n\n#endif\n\n\n'''
+platform_block = '''#if defined(SFML_SYSTEM_EMSCRIPTEN) || defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)
+
+    // Emscripten / WebAssembly
+    #define SFML_SYSTEM_EMSCRIPTEN
+
+#elif defined(_WIN32)
+
+    // Windows
+    #define SFML_SYSTEM_WINDOWS
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+
+#elif defined(__APPLE__) && defined(__MACH__)
+
+    // Apple platform, see which one it is
+    #include "TargetConditionals.h"
+
+    #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+
+        // iOS
+        #define SFML_SYSTEM_IOS
+
+    #elif TARGET_OS_MAC
+
+        // MacOS
+        #define SFML_SYSTEM_MACOS
+
+    #else
+
+        // Unsupported Apple system
+        #error This Apple operating system is not supported by SFML library
+
+    #endif
+
+#elif defined(__unix__)
+
+    // UNIX system, see which one it is
+    #if defined(__ANDROID__)
+
+        // Android
+        #define SFML_SYSTEM_ANDROID
+
+    #elif defined(__linux__)
+
+        // Linux
+        #define SFML_SYSTEM_LINUX
+
+    #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+
+        // FreeBSD
+        #define SFML_SYSTEM_FREEBSD
+
+    #elif defined(__OpenBSD__)
+
+        // OpenBSD
+        #define SFML_SYSTEM_OPENBSD
+
+    #else
+
+        // Unsupported UNIX system
+        #error This UNIX operating system is not supported by SFML library
+
+    #endif
+
+#else
+
+    // Unsupported system
+    #error This operating system is not supported by SFML library
+
+#endif
+
+
+'''
 
 text = text[:start] + platform_block + text[end:]
 config_h.write_text(text, encoding="utf-8")
@@ -36,12 +114,15 @@ cmake_text = sfml_cmake.read_text(encoding="utf-8")
 if "add_definitions(-D__EMSCRIPTEN__)" not in cmake_text:
     m = re.search(r"project\\(SFML\\)\\s*\\n", cmake_text)
     if not m:
-        raise RuntimeError("Could not locate SFML project() declaration")
-    cmake_text = cmake_text[:m.end()] + "add_definitions(-D__EMSCRIPTEN__)\n" + cmake_text[m.end():]
+        # The older SFML tag may format project() differently; append a safe
+        # directory-wide definition instead of failing the compatibility pass.
+        cmake_text = "add_definitions(-D__EMSCRIPTEN__)\n" + cmake_text
+    else:
+        cmake_text = cmake_text[:m.end()] + "add_definitions(-D__EMSCRIPTEN__)\n" + cmake_text[m.end():]
     sfml_cmake.write_text(cmake_text, encoding="utf-8")
 
 final_text = config_h.read_text(encoding="utf-8")
-branch_pos = final_text.find("#elif defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)")
+branch_pos = final_text.find("#if defined(SFML_SYSTEM_EMSCRIPTEN) || defined(__EMSCRIPTEN__) || defined(EMSCRIPTEN)")
 unix_pos = final_text.find("#elif defined(__unix__)")
 if branch_pos < 0 or unix_pos < 0 or branch_pos >= unix_pos:
     raise RuntimeError("SFML Emscripten branch is not before the UNIX branch")
